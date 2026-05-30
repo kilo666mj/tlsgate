@@ -162,9 +162,39 @@ On first startup with an empty SQLite database, existing entries from
 `/var/lib/tlsgate/db.json` are imported automatically if that legacy
 JSON file exists.
 
+When tlsgate is running with Docker Compose, run management commands inside the
+running service container so they use the same mounted database:
+
+```bash
+docker compose exec tlsgate /tlsgate list
+
+docker compose exec tlsgate /tlsgate approve --label "Alice iPhone" <fingerprint>
+```
+
 `correlate` reads `/var/log/syslog` by default and matches the fingerprint's
 known IPs around its first/last seen timestamps. Use `--log <path>` for another
 log file and `--window 5m` to widen the matching window.
+
+In a container, `/var/log/syslog` is not present unless you mount it explicitly
+into the running service. With Compose, add a read-only log bind mount:
+
+```bash
+volumes:
+  - tlsgate-data:/var/lib/tlsgate
+  - /var/log/syslog:/var/log/syslog:ro
+```
+
+Then run:
+
+```bash
+docker compose exec tlsgate /tlsgate correlate <fingerprint>
+```
+
+Correlation is most useful with host networking because tlsgate sees real
+client IPs. With bridge networking, Docker NAT may record the Docker gateway IP
+instead. If tlsgate is not already running, a one-off `docker run` works too,
+but it must mount the exact same database volume or host path used by the
+service.
 
 ## Blocked range alerts
 
