@@ -6,5 +6,6 @@
     "username": {{ mattermost_username | default('tlsgate') | to_json }},
     "icon_url": {{ mattermost_icon_url | default('') | to_json }}
   },
+  "max_fingerprints": {{ max_fingerprints | default(0) | int }},
   "alert_ranges": {{ alert_ranges | default([]) | to_nice_json }}
 }

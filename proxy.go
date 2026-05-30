@@ -13,7 +13,14 @@ import (
 	"time"
 )
 
+const recordTypeHandshake = 0x16
+
 const maxTLSRecordBody = 18 * 1024
+
+// maxClientHello bounds the total reassembled ClientHello handshake message
+// across TLS records. Large (e.g. post-quantum) hellos legitimately span
+// several records; this caps how much we will buffer before giving up.
+const maxClientHello = 64 * 1024
 
 // idleTimeout bounds inactivity on a proxied connection once the
 // handshake has been inspected and forwarded. Set above the IMAP IDLE
@@ -39,6 +46,10 @@ const (
 // LimitNOFILE in the systemd unit comfortably above 2x this value.
 const maxConcurrentConns = 1024
 
+// fingerprintPrunePeriod is how often the store is trimmed back to the
+// configured max_fingerprints cap, if one is set.
+const fingerprintPrunePeriod = time.Minute
+
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	var routes routeFlag
@@ -52,6 +63,8 @@ func cmdServe(args []string) {
 	if len(routes) == 0 {
 		log.Fatalf("no routes: pass at least one --route LISTEN=BACKEND")
 	}
+
+	log.Printf("tlsgate %s starting", version)
 
 	method, err := ParseFingerprintMethod(*fingerprint)
 	if err != nil {
@@ -74,6 +87,28 @@ func cmdServe(args []string) {
 	alerter, err := NewBlockedRangeAlerter(cfg)
 	if err != nil {
 		log.Fatalf("load alert ranges: %v", err)
+	}
+
+	// Bound store growth from unauthenticated unknown clients: trim back to
+	// the configured cap at startup and on a timer. Approved entries are
+	// never evicted (see Store.PruneToLimit).
+	if cfg.MaxFingerprints > 0 {
+		log.Printf("max fingerprints: %d", cfg.MaxFingerprints)
+		prune := func() {
+			if n, err := store.PruneToLimit(cfg.MaxFingerprints); err != nil {
+				log.Printf("prune fingerprints: %v", err)
+			} else if n > 0 {
+				log.Printf("pruned %d fingerprint(s) over limit %d", n, cfg.MaxFingerprints)
+			}
+		}
+		prune()
+		go func() {
+			t := time.NewTicker(fingerprintPrunePeriod)
+			defer t.Stop()
+			for range t.C {
+				prune()
+			}
+		}()
 	}
 
 	// One limiter shared across all listeners so a source IP's budget
@@ -178,21 +213,21 @@ func handleConn(client net.Conn, backend string, port int, store *Store, blockUn
 
 	var peeked []byte
 
-	if header[0] == 0x16 { // TLS handshake record
-		bodyLen := int(header[3])<<8 | int(header[4])
-		if bodyLen > maxTLSRecordBody {
-			log.Printf("[%s:%d] TLS record too large: %d", clientIP, port, bodyLen)
-			return
-		}
-		body := make([]byte, bodyLen)
-		if _, err := io.ReadFull(client, body); err != nil {
-			return
-		}
-		peeked = append(header, body...)
-
-		fp, meta, err := extractTLSMetadata(peeked, method)
-		if err != nil {
-			log.Printf("[%s:%d] JA3 error: %v", clientIP, port, err)
+	if header[0] == recordTypeHandshake {
+		// Reassemble the ClientHello, which may span multiple TLS records,
+		// then parse it strictly. peeked holds every raw byte we read so the
+		// backend receives the handshake unchanged.
+		parseBuf, raw, rerr := readClientHello(client, header)
+		peeked = raw
+		if rerr != nil {
+			log.Printf("[%s:%d] ClientHello error: %v", clientIP, port, rerr)
+			if blockUnknown {
+				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
+				return
+			}
+			// allow-unknown: fall through and forward what we read.
+		} else if fp, meta, perr := extractTLSMetadata(parseBuf, method); perr != nil {
+			log.Printf("[%s:%d] parse error: %v", clientIP, port, perr)
 			if blockUnknown {
 				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
 				return
@@ -259,6 +294,60 @@ func handleConn(client net.Conn, backend string, port int, store *Store, blockUn
 	go func() { pump(upstream, client); done <- struct{}{} }()
 	go func() { pump(client, upstream); done <- struct{}{} }()
 	<-done
+}
+
+// readClientHello reads TLS handshake records from conn, starting with the
+// already-read firstHeader, until the full ClientHello handshake message is
+// assembled. It returns parseBuf (a 5-byte record header followed by the
+// reassembled handshake message, suitable for parseClientHello) and raw (every
+// byte consumed from conn, so the caller can forward the handshake verbatim).
+//
+// It only reads beyond the first record when the handshake-length field says
+// the message continues, so a truncated or tiny probe fails fast instead of
+// blocking for more data. Total size is capped by maxClientHello.
+func readClientHello(conn net.Conn, firstHeader []byte) (parseBuf, raw []byte, err error) {
+	raw = append(raw, firstHeader...)
+	hdr := firstHeader
+	var bodies []byte
+	for {
+		if hdr[0] != recordTypeHandshake {
+			return nil, raw, fmt.Errorf("non-handshake record type 0x%02x", hdr[0])
+		}
+		bodyLen := int(hdr[3])<<8 | int(hdr[4])
+		if bodyLen == 0 || bodyLen > maxTLSRecordBody {
+			return nil, raw, fmt.Errorf("invalid record body length %d", bodyLen)
+		}
+		if len(bodies)+bodyLen > maxClientHello {
+			return nil, raw, fmt.Errorf("ClientHello exceeds %d bytes", maxClientHello)
+		}
+		body := make([]byte, bodyLen)
+		if _, err = io.ReadFull(conn, body); err != nil {
+			return nil, raw, err
+		}
+		raw = append(raw, body...)
+		bodies = append(bodies, body...)
+
+		// Need the 4-byte handshake header before the declared length is known.
+		if len(bodies) < 4 {
+			return nil, raw, fmt.Errorf("ClientHello shorter than handshake header (%d bytes)", len(bodies))
+		}
+		total := 4 + (int(bodies[1])<<16 | int(bodies[2])<<8 | int(bodies[3]))
+		if total > maxClientHello {
+			return nil, raw, fmt.Errorf("ClientHello message too large: %d bytes", total)
+		}
+		if len(bodies) >= total {
+			break // full handshake message assembled
+		}
+
+		// Message continues in another record.
+		hdr = make([]byte, 5)
+		if _, err = io.ReadFull(conn, hdr); err != nil {
+			return nil, raw, err
+		}
+		raw = append(raw, hdr...)
+	}
+	parseBuf = append(append([]byte{}, firstHeader...), bodies...)
+	return parseBuf, raw, nil
 }
 
 func sanitizeLog(s string) string {

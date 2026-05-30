@@ -54,57 +54,90 @@ func isGREASE(v uint16) bool {
 	return v&0xff == v>>8 && v&0x0f == 0x0a
 }
 
+// parseClientHello strictly parses a complete ClientHello. data is a 5-byte
+// TLS record header followed by the fully reassembled handshake message (see
+// readClientHello). Every field is bounded by the handshake-message length
+// declared in the header; any length that runs past it, or a buffer that does
+// not contain the whole declared message, is rejected rather than parsed
+// partially — so truncated or malformed handshakes do not pollute the store.
 func parseClientHello(data []byte) (*clientHello, error) {
-	// data includes the 5-byte TLS record header
 	if len(data) < 9 || data[0] != 0x16 || data[5] != 0x01 {
 		return nil, fmt.Errorf("not a TLS ClientHello")
 	}
-
-	// Skip: record header (5) + handshake type (1) + handshake length (3)
-	pos := 9
-
-	if len(data) < pos+2 {
-		return nil, fmt.Errorf("too short for version")
+	// Handshake message length (24-bit) sets the hard end of the message.
+	hsLen := int(data[6])<<16 | int(data[7])<<8 | int(data[8])
+	end := 9 + hsLen
+	if len(data) < end {
+		return nil, fmt.Errorf("truncated ClientHello: have %d handshake bytes, want %d", len(data)-9, hsLen)
 	}
-	ch := &clientHello{
-		version: uint16(data[pos])<<8 | uint16(data[pos+1]),
+
+	pos := 9 // record header (5) + handshake type (1) + handshake length (3)
+	// need reports whether n more bytes fit before the handshake message end.
+	need := func(n int) bool { return pos+n <= end }
+
+	if !need(2) {
+		return nil, fmt.Errorf("malformed ClientHello: version")
 	}
+	ch := &clientHello{version: uint16(data[pos])<<8 | uint16(data[pos+1])}
 	pos += 2
 
+	if !need(32) {
+		return nil, fmt.Errorf("malformed ClientHello: random")
+	}
 	pos += 32 // random
 
-	if len(data) < pos+1 {
-		return ch, nil
+	if !need(1) {
+		return nil, fmt.Errorf("malformed ClientHello: session id length")
 	}
-	pos += 1 + int(data[pos]) // session ID
+	sidLen := int(data[pos])
+	pos++
+	if !need(sidLen) {
+		return nil, fmt.Errorf("malformed ClientHello: session id")
+	}
+	pos += sidLen
 
-	if len(data) < pos+2 {
-		return ch, nil
+	if !need(2) {
+		return nil, fmt.Errorf("malformed ClientHello: cipher suites length")
 	}
 	cipherLen := int(data[pos])<<8 | int(data[pos+1])
 	pos += 2
-	for i := 0; i < cipherLen && pos+2 <= len(data); i += 2 {
+	if cipherLen%2 != 0 || !need(cipherLen) {
+		return nil, fmt.Errorf("malformed ClientHello: cipher suites")
+	}
+	for i := 0; i < cipherLen; i += 2 {
 		ch.cipherSuites = append(ch.cipherSuites, uint16(data[pos])<<8|uint16(data[pos+1]))
 		pos += 2
 	}
 
-	if len(data) < pos+1 {
+	if !need(1) {
+		return nil, fmt.Errorf("malformed ClientHello: compression length")
+	}
+	compLen := int(data[pos])
+	pos++
+	if !need(compLen) {
+		return nil, fmt.Errorf("malformed ClientHello: compression methods")
+	}
+	pos += compLen
+
+	// Extensions are optional (absent in older ClientHellos).
+	if pos == end {
 		return ch, nil
 	}
-	pos += 1 + int(data[pos]) // compression methods
-
-	if len(data) < pos+2 {
-		return ch, nil
+	if !need(2) {
+		return nil, fmt.Errorf("malformed ClientHello: extensions length")
 	}
 	extEnd := pos + 2 + (int(data[pos])<<8 | int(data[pos+1]))
 	pos += 2
+	if extEnd > end {
+		return nil, fmt.Errorf("malformed ClientHello: extensions overrun")
+	}
 
-	for pos+4 <= extEnd && pos+4 <= len(data) {
+	for pos+4 <= extEnd {
 		extType := uint16(data[pos])<<8 | uint16(data[pos+1])
 		extLen := int(data[pos+2])<<8 | int(data[pos+3])
 		pos += 4
-		if pos+extLen > len(data) {
-			break
+		if pos+extLen > extEnd {
+			return nil, fmt.Errorf("malformed ClientHello: extension 0x%04x body", extType)
 		}
 		ext := data[pos : pos+extLen]
 		ch.extensions = append(ch.extensions, extType)
