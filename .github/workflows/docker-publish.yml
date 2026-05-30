@@ -12,6 +12,9 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+permissions:
+  contents: read
+
 jobs:
   test:
     # Stable display name for the branch-protection required check. Keep this
