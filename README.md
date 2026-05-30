@@ -296,3 +296,7 @@ metadata keeps them visible for inspection.
 2. Connect from all your devices (phone, laptop, etc.)
 3. Run `tlsgate list` and approve each one
 4. Remove `allow_unknown=true` from inventory and re-deploy
+
+## License
+
+MIT. See [LICENSE](LICENSE).
