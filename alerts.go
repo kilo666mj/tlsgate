@@ -22,8 +22,13 @@ const (
 )
 
 type AppConfig struct {
-	Mattermost  MattermostConfig   `json:"mattermost"`
-	AlertRanges []AlertRangeConfig `json:"alert_ranges"`
+	Mattermost MattermostConfig `json:"mattermost"`
+	// MaxFingerprints caps how many fingerprint entries are kept in the
+	// store, bounding disk growth from unauthenticated unknown clients.
+	// 0 means unlimited. Approved entries are never evicted; the oldest
+	// non-approved (pending/blocked) entries are pruned first.
+	MaxFingerprints int                `json:"max_fingerprints"`
+	AlertRanges     []AlertRangeConfig `json:"alert_ranges"`
 }
 
 type MattermostConfig struct {
@@ -83,7 +88,28 @@ func loadConfig(path string) (AppConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return AppConfig{}, err
 	}
+	if cfg.MaxFingerprints < 0 {
+		return AppConfig{}, fmt.Errorf("max_fingerprints must be >= 0, got %d", cfg.MaxFingerprints)
+	}
+	// Webhook URLs carry alert content and secret tokens; require TLS so an
+	// accidental http:// endpoint cannot leak them in cleartext.
+	if err := requireHTTPS("mattermost.primary_url", cfg.Mattermost.PrimaryURL); err != nil {
+		return AppConfig{}, err
+	}
+	if err := requireHTTPS("mattermost.secondary_url", cfg.Mattermost.SecondaryURL); err != nil {
+		return AppConfig{}, err
+	}
 	return cfg, nil
+}
+
+func requireHTTPS(field, rawURL string) error {
+	if rawURL == "" {
+		return nil
+	}
+	if !strings.HasPrefix(rawURL, "https://") {
+		return fmt.Errorf("%s must be an https:// URL", field)
+	}
+	return nil
 }
 
 func NewBlockedRangeAlerter(cfg AppConfig) (*BlockedRangeAlerter, error) {

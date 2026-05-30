@@ -232,6 +232,40 @@ func (s *Store) Seen(fp, ip string, port int, meta TLSMetadata, blockUnknown boo
 	return status, nil
 }
 
+// PruneToLimit enforces a cap on the number of stored fingerprints, bounding
+// disk growth from unauthenticated unknown clients. When the count exceeds
+// max, it deletes the oldest non-approved entries (by last_seen) until the
+// count is back at or below max, or until only approved entries remain.
+// Approved fingerprints are authoritative and never evicted. max <= 0 disables
+// pruning. Returns the number of entries deleted (ips/ports cascade).
+func (s *Store) PruneToLimit(max int) (int, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+	ctx := context.Background()
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fingerprints`).Scan(&count); err != nil {
+		return 0, err
+	}
+	excess := count - max
+	if excess <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM fingerprints
+		WHERE fp IN (
+			SELECT fp FROM fingerprints
+			WHERE status != ?
+			ORDER BY last_seen ASC
+			LIMIT ?
+		)`, StatusApproved, excess)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 func (s *Store) SetStatus(fp string, status Status) error {
 	res, err := s.db.Exec(`UPDATE fingerprints SET status = ? WHERE fp = ?`, status, fp)
 	if err != nil {

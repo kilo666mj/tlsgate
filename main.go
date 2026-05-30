@@ -11,6 +11,10 @@ import (
 
 const defaultDB = "/var/lib/tlsgate/db.sqlite"
 
+// version is the build version, overridden at link time via
+// -ldflags "-X main.version=<tag>". Defaults to "dev" for local builds.
+var version = "dev"
+
 const usage = `Usage: tlsgate <command> [options]
 
 Commands:
@@ -21,6 +25,7 @@ Commands:
   block    Block a fingerprint
   label    Set a label on a fingerprint
   delete   Delete a fingerprint
+  version  Print the build version
 `
 
 func main() {
@@ -43,6 +48,8 @@ func main() {
 		cmdLabel(os.Args[2:])
 	case "delete":
 		cmdDelete(os.Args[2:])
+	case "version", "--version", "-version":
+		fmt.Printf("tlsgate %s\n", version)
 	default:
 		fmt.Printf("unknown command: %s\n\n", os.Args[1])
 		fmt.Print(usage)

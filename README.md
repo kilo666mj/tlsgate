@@ -190,6 +190,9 @@ mattermost_channel: "#logw"
 mattermost_username: "tlsgate"
 mattermost_icon_url: ""
 
+# Cap stored fingerprints (0 = unlimited). Approved entries are never evicted.
+max_fingerprints: 100000
+
 alert_ranges:
   - name: home
     cidrs:
@@ -200,6 +203,10 @@ alert_ranges:
 Do not commit this file; it may contain Mattermost webhook secrets and private
 network ranges.
 
+Webhook URLs (`primary_url`, `secondary_url`) must be `https://`; tlsgate
+refuses to start otherwise, so alert content and webhook tokens are never sent
+in cleartext.
+
 ```json
 {
   "mattermost": {
@@ -209,6 +216,7 @@ network ranges.
     "username": "tlsgate",
     "icon_url": "https://example.com/icon.png"
   },
+  "max_fingerprints": 100000,
   "alert_ranges": [
     {
       "name": "home",
@@ -217,6 +225,21 @@ network ranges.
   ]
 }
 ```
+
+## Limiting store growth
+
+Every parseable ClientHello from an unknown client is recorded, including
+blocked ones. The per-IP rate limit slows a single source, but many addresses
+(e.g. a wide IPv6 range) can still grow the SQLite database over time.
+
+Set `max_fingerprints` in the config to cap how many entries are kept (0, the
+default, means unlimited). When the store exceeds the cap, the oldest
+**non-approved** entries are pruned first — at startup and once a minute.
+**Approved fingerprints are never evicted**, so the allow-list is unaffected;
+if approved entries alone exceed the cap, the store is allowed to stay above it
+rather than drop a real client. Pick a cap comfortably above your number of
+real clients (which is small) so legitimate pending entries survive long enough
+to be reviewed.
 
 ## Logs
 
@@ -255,6 +278,11 @@ behind one NAT address — do not hit them.
 Fingerprint entries also store passive ClientHello metadata when available:
 SNI, ALPN protocols, supported TLS versions, signature algorithms, and the
 full JA3 string. This does not require terminating TLS.
+
+The ClientHello is parsed strictly: the handshake is reassembled across TLS
+records (so large, e.g. post-quantum, hellos that span multiple records are
+handled), and any truncated or malformed handshake is rejected rather than
+recorded as a fingerprint, so the store is not polluted by partial parses.
 
 Verbose TLS metadata may show values such as `GREASE(0x6a6a)`. These are
 reserved TLS placeholder values intentionally sent by modern clients to keep
