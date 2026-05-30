@@ -1,0 +1,47 @@
+# Example deployment of tlsgate in front of a mail server (mailcow) listening
+# on internal-only ports 10993 (IMAP) and 10465 (SMTPS).
+#
+#   docker compose up -d
+#
+# host networking is used so the localhost backends below are reachable and
+# tlsgate sees real client source IPs. It is Linux-only; for a bridge network
+# see the commented alternative at the bottom.
+services:
+  tlsgate:
+    image: ghcr.io/kilo666mj/tlsgate:latest
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - serve
+      - --route=[::]:993=127.0.0.1:10993
+      - --route=[::]:465=127.0.0.1:10465
+      - --fingerprint=ja4
+      # First-time setup: uncomment to record (not block) unknown clients while
+      # you connect each device, then `tlsgate list` / `approve` and remove it.
+      # - --allow-unknown
+    volumes:
+      # Persists the SQLite approval store and, if present, config.json for
+      # blocked-range alerts (see the README).
+      - tlsgate-data:/var/lib/tlsgate
+
+volumes:
+  tlsgate-data:
+
+# Bridge-network alternative (works on non-Linux, but the backend must be
+# reachable from inside the container and client IPs are NATed to the docker
+# gateway):
+#
+# services:
+#   tlsgate:
+#     image: ghcr.io/kilo666mj/tlsgate:latest
+#     restart: unless-stopped
+#     ports:
+#       - "993:993"
+#       - "465:465"
+#     command:
+#       - serve
+#       - --route=[::]:993=host.docker.internal:10993
+#       - --route=[::]:465=host.docker.internal:10465
+#       - --fingerprint=ja4
+#     volumes:
+#       - tlsgate-data:/var/lib/tlsgate

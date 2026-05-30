@@ -1,0 +1,270 @@
+# tlsgate
+
+> **Written with AI.** This project was developed with the help of an AI
+> assistant (Anthropic's Claude, via Claude Code). The code has been reviewed
+> and tested, but treat it accordingly: read it before you run it, and see the
+> security model below for what it does and does not protect.
+
+TCP proxy that computes a TLS ClientHello fingerprint (JA3 or JA4) and
+allows/blocks connections based on an approval store. Routes are generic
+(`--route LISTEN=BACKEND`, repeatable); fronting a mail server on IMAP (993)
+and SMTPS (465) is the common case but not the only one.
+
+## How it works
+
+Sits in front of one or more TLS backends, peeks at the ClientHello before
+forwarding. Unknown fingerprints are **blocked by default** — only approved
+fingerprints get forwarded. Pass `--allow-unknown` to temporarily let unknown
+connections through while setting up.
+
+The original and primary use is fronting [mailcow](https://mailcow.email/) on
+the mail submission/retrieval ports; examples below use that setup.
+
+## JA3 vs JA4
+
+`--fingerprint ja3` (default) or `--fingerprint ja4` selects which fingerprint
+is the allow/block key. Both are always computed and recorded; only the key
+used for decisions changes. The store key changes with the method, so switching
+restarts approvals from empty — re-approve your clients after a switch.
+
+- **JA3** — MD5 over TLS version, cipher list, extension list, curves, and EC
+  point formats. Order-sensitive: a client that shuffles its TLS extension order
+  (GREASE, deliberate randomization) yields a different JA3 per connection,
+  which can falsely block a legitimate client. Large public corpus.
+- **JA4** — sorts ciphers and extensions before hashing, so it is stable across
+  extension reordering — fewer false blocks. The fingerprint is also
+  human-readable (e.g. `t13d1516h2_8daaf6152771_b186095e22b6`: TCP, TLS 1.3,
+  SNI present, cipher/extension counts, ALPN, then two truncated SHA-256
+  hashes). Recommended for a small self-seeded allow-list.
+
+Neither is a credential — see the security model below. The choice only affects
+the false-positive rate, not how hard the fingerprint is to spoof.
+
+## Security model — read this
+
+**A TLS fingerprint (JA3 or JA4) is not a credential. It is trivially
+spoofable.** The proxy does not terminate TLS; it decides solely on the bytes
+of the ClientHello. An attacker who crafts a ClientHello matching an approved
+fingerprint is forwarded. The fingerprints of common clients (Apple Mail,
+Thunderbird, Outlook, browsers) are publicly known, so an attacker does not
+even need to observe your traffic to guess an approved value.
+
+Treat this as a **noise filter, not access control**. It cheaply turns away the
+constant background of opportunistic scanners and credential-stuffing bots that
+don't bother matching a real client's TLS fingerprint, which keeps logs and
+alerts readable. It does **not** authenticate anyone. The actual security
+boundary remains the backend: real TLS termination plus the backend's own
+authentication (e.g. IMAP/SMTP auth on mailcow). Do not weaken backend
+hardening (strong passwords, fail2ban, rate limits) on the assumption that
+fingerprint blocking gates access.
+
+## Prerequisites
+
+- the backend service must be moved off its public port to an internal-only
+  port (for mailcow: ports 993 and 465 to e.g. 10993 and 10465)
+- Go 1.26.3+ on the machine running the Ansible playbook
+
+## Deploy
+
+```bash
+cd ansible
+ansible-playbook playbook.yml --ask-become-pass
+```
+
+To temporarily allow unknown fingerprints (e.g. during initial setup), set
+`allow_unknown=true` in `ansible/inventory` and re-run.
+
+To use JA4 instead of JA3, set `fingerprint=ja4` in `ansible/inventory` (default
+`ja3`). Switching the method resets the approval set, so re-approve clients after.
+
+## Docker
+
+Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR:
+
+```bash
+docker pull ghcr.io/kilo666mj/tlsgate:latest
+```
+
+Or build the static `FROM scratch` image yourself:
+
+```bash
+docker build -t tlsgate .
+```
+
+### docker compose
+
+The repo ships an example [`docker-compose.yml`](docker-compose.yml) that fronts
+a mailcow backend on the standard ports. Adjust the routes/backends, then:
+
+```bash
+docker compose up -d
+```
+
+It uses host networking so the localhost backends are reachable and tlsgate sees
+real client source IPs; a bridge-network variant is included as a comment.
+
+### docker run
+
+Run it with persistent state mounted at the default database/config directory:
+
+```bash
+docker run --rm \
+  -p 993:993 \
+  -p 465:465 \
+  -v tlsgate-data:/var/lib/tlsgate \
+  tlsgate serve \
+    --route [::]:993=127.0.0.1:10993 \
+    --route [::]:465=127.0.0.1:10465 \
+    --allow-unknown
+```
+
+Each `--route LISTEN=BACKEND` adds a proxied port; repeat it for as many
+services as you need (host or container-network backend addresses):
+
+```bash
+docker run --rm \
+  --network host \
+  -v tlsgate-data:/var/lib/tlsgate \
+  tlsgate serve \
+    --route [::]:993=127.0.0.1:10993 \
+    --route [::]:465=127.0.0.1:10465
+```
+
+## Managing fingerprints
+
+```bash
+# List all seen fingerprints
+tlsgate list
+
+# Include full passive TLS metadata, including the JA3 string
+tlsgate list -v
+
+# Correlate a fingerprint with Postfix/Dovecot/mailcow syslog lines
+tlsgate correlate <fingerprint>
+
+# Approve a fingerprint (optionally label it)
+tlsgate approve --label "Alice iPhone" <fingerprint>
+
+# Block a fingerprint
+tlsgate block <fingerprint>
+
+# Label an already-approved fingerprint
+tlsgate label <fingerprint> "Alice MacBook"
+
+# Delete a fingerprint entry
+tlsgate delete <fingerprint>
+```
+
+All commands accept `--db <path>` to point at a non-default database.
+Default database: `/var/lib/tlsgate/db.sqlite`
+
+On first startup with an empty SQLite database, existing entries from
+`/var/lib/tlsgate/db.json` are imported automatically if that legacy
+JSON file exists.
+
+`correlate` reads `/var/log/syslog` by default and matches the fingerprint's
+known IPs around its first/last seen timestamps. Use `--log <path>` for another
+log file and `--window 5m` to widen the matching window.
+
+## Blocked range alerts
+
+`serve` reads optional alert configuration from
+`/var/lib/tlsgate/config.json`, or another path passed with
+`--config <path>`. If `alert_ranges` are configured, a blocked connection from
+a matching CIDR sends a Mattermost alert the first time each source IP is seen
+for that range. Alerts are deduplicated in SQLite, so repeated blocked attempts
+from the same IP/range do not spam the channel.
+
+Ansible deploys this config when `alert_ranges` is defined. Prefer the
+router-advertised IPv6 delegated prefix over the narrower `/64` shown on a
+single host interface.
+
+For Ansible-managed alert config, create a local ignored file at
+`ansible/group_vars/tlsgate.yml`:
+
+```yaml
+---
+mattermost_primary_url: "https://matter.example/hooks/primary"
+mattermost_secondary_url: ""
+mattermost_channel: "#logw"
+mattermost_username: "tlsgate"
+mattermost_icon_url: ""
+
+alert_ranges:
+  - name: home
+    cidrs:
+      - "198.51.100.10/32"
+      - "2001:db8:1234:5600::/59"
+```
+
+Do not commit this file; it may contain Mattermost webhook secrets and private
+network ranges.
+
+```json
+{
+  "mattermost": {
+    "primary_url": "https://matter.example/hooks/primary",
+    "secondary_url": "https://matter2.example/hooks/secondary",
+    "channel": "#logw",
+    "username": "tlsgate",
+    "icon_url": "https://example.com/icon.png"
+  },
+  "alert_ranges": [
+    {
+      "name": "home",
+      "cidrs": ["198.51.100.10/32", "2001:db8:1234:5600::/59"]
+    }
+  ]
+}
+```
+
+## Logs
+
+```bash
+journalctl -u tlsgate -f
+```
+
+Log lines show status per connection:
+
+```
+PENDING   fp=abc123... ja3=771,4865-4866...
+APPROVED  fp=abc123...
+BLOCKED   fp=def456...
+RATELIMIT dropping connection
+OVERLOAD  at capacity, dropping connection
+```
+
+Two limits protect against floods:
+
+- **Per source IP** — a token bucket (~1 conn/s sustained, burst 120) checked
+  before any handshake read or database write. A single IP over its budget is
+  dropped with a `RATELIMIT` line. This bounds connection floods and
+  fingerprint-store growth from randomized ClientHellos from one address. It
+  throttles the *rate* of new entries per IP, not the lifetime total, and an
+  attacker spread across many IPv6 addresses can still stay under the per-IP
+  ceiling.
+- **Global** — at most `maxConcurrentConns` (1024) connections are processed at
+  once across all listeners, capping goroutines, file descriptors, and backend
+  dials. Connections beyond the cap are dropped with an `OVERLOAD` line. This
+  catches the distributed/IPv6 case the per-IP limiter misses. The systemd unit
+  sets `LimitNOFILE=8192` to leave headroom above the resulting socket count.
+
+Both limits are generous enough that legitimate clients — including many devices
+behind one NAT address — do not hit them.
+
+Fingerprint entries also store passive ClientHello metadata when available:
+SNI, ALPN protocols, supported TLS versions, signature algorithms, and the
+full JA3 string. This does not require terminating TLS.
+
+Verbose TLS metadata may show values such as `GREASE(0x6a6a)`. These are
+reserved TLS placeholder values intentionally sent by modern clients to keep
+servers tolerant of unknown TLS codes. They are not unknown protocol versions
+or signature algorithms. JA3 generation skips GREASE values, while verbose
+metadata keeps them visible for inspection.
+
+## Setup workflow
+
+1. Set `allow_unknown=true` in inventory and deploy
+2. Connect from all your devices (phone, laptop, etc.)
+3. Run `tlsgate list` and approve each one
+4. Remove `allow_unknown=true` from inventory and re-deploy

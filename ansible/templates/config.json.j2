@@ -1,0 +1,10 @@
+{
+  "mattermost": {
+    "primary_url": {{ mattermost_primary_url | default('') | to_json }},
+    "secondary_url": {{ mattermost_secondary_url | default('') | to_json }},
+    "channel": {{ mattermost_channel | default('#logw') | to_json }},
+    "username": {{ mattermost_username | default('tlsgate') | to_json }},
+    "icon_url": {{ mattermost_icon_url | default('') | to_json }}
+  },
+  "alert_ranges": {{ alert_ranges | default([]) | to_nice_json }}
+}

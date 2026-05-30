@@ -1,0 +1,81 @@
+---
+- name: Deploy tlsgate proxy
+  hosts: tlsgate
+  become: true
+
+  vars:
+    goarch_map:
+      x86_64: amd64
+      aarch64: arm64
+      armv7l: arm
+    goarch: "{{ goarch_map[ansible_facts['architecture']] | default('amd64') }}"
+
+  tasks:
+    - name: Build binary for linux/{{ goarch }}
+      delegate_to: localhost
+      become: false
+      command:
+        cmd: go build -o /tmp/tlsgate .
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        GOOS: linux
+        GOARCH: "{{ goarch }}"
+      changed_when: true
+
+    - name: Create tlsgate system user
+      user:
+        name: tlsgate
+        system: true
+        shell: /usr/sbin/nologin
+        home: /var/lib/tlsgate
+        create_home: false
+
+    - name: Create data directory
+      file:
+        path: /var/lib/tlsgate
+        state: directory
+        mode: '0750'
+        owner: tlsgate
+        group: tlsgate
+
+    - name: Deploy alert config
+      template:
+        src: config.json.j2
+        dest: /var/lib/tlsgate/config.json
+        mode: '0600'
+        owner: tlsgate
+        group: tlsgate
+      when: alert_ranges is defined
+      notify: Restart tlsgate
+
+    - name: Copy binary
+      copy:
+        src: /tmp/tlsgate
+        dest: /usr/local/bin/tlsgate
+        mode: '0755'
+      notify: Restart tlsgate
+
+    - name: Deploy systemd service
+      template:
+        src: tlsgate.service.j2
+        dest: /etc/systemd/system/tlsgate.service
+        mode: '0644'
+      notify:
+        - Reload systemd
+        - Restart tlsgate
+
+    - name: Enable and start tlsgate
+      systemd:
+        name: tlsgate
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Restart tlsgate
+      systemd:
+        name: tlsgate
+        state: restarted

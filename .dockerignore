@@ -1,0 +1,10 @@
+.git
+.agents
+.codex
+ansible/group_vars
+db.json
+db.sqlite
+db.sqlite-*
+tlsgate
+*.test
+coverage.out

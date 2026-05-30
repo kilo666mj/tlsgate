@@ -1,0 +1,288 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const maxTLSRecordBody = 18 * 1024
+
+// idleTimeout bounds inactivity on a proxied connection once the
+// handshake has been inspected and forwarded. Set above the IMAP IDLE
+// re-issue cycle (~29min per RFC 2177, observed ~31min) so long-lived
+// IDLE sessions are not severed mid-wait.
+const idleTimeout = 35 * time.Minute
+
+// Per-source-IP connection rate limit. Generous enough that legitimate
+// clients (including many devices behind a single NAT address) never hit
+// it, while throttling a flood of randomized ClientHellos that would
+// otherwise grow the fingerprint store unbounded. rateLimitTTL must be
+// >= connBurstPerIP/connRatePerIP so idle eviction only drops full buckets.
+const (
+	connRatePerIP   = 1.0 // tokens (connections) per second, sustained
+	connBurstPerIP  = 120 // tolerated burst before throttling kicks in
+	rateLimitTTL    = 5 * time.Minute
+	rateSweepPeriod = time.Minute
+)
+
+// maxConcurrentConns caps connections processed at once across all
+// listeners, bounding goroutines, file descriptors, and backend dials so a
+// distributed flood cannot exhaust them. Each connection costs ~2 fds; keep
+// LimitNOFILE in the systemd unit comfortably above 2x this value.
+const maxConcurrentConns = 1024
+
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	var routes routeFlag
+	fs.Var(&routes, "route", "LISTEN=BACKEND route to proxy, repeatable (e.g. [::]:993=127.0.0.1:10993)")
+	dbPath := fs.String("db", defaultDB, "fingerprint database path")
+	configPath := fs.String("config", defaultConfig, "JSON config path for alerting")
+	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
+	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
+	fs.Parse(args)
+
+	if len(routes) == 0 {
+		log.Fatalf("no routes: pass at least one --route LISTEN=BACKEND")
+	}
+
+	method, err := ParseFingerprintMethod(*fingerprint)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	if err := ensureDir(filepath.Dir(*dbPath)); err != nil {
+		log.Fatalf("create db dir: %v", err)
+	}
+
+	store, err := NewStore(*dbPath)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	alerter, err := NewBlockedRangeAlerter(cfg)
+	if err != nil {
+		log.Fatalf("load alert ranges: %v", err)
+	}
+
+	// One limiter shared across all listeners so a source IP's budget
+	// spans every route combined rather than doubling per port.
+	limiter := newRateLimiter(connRatePerIP, connBurstPerIP, rateLimitTTL)
+	go limiter.runSweeper(rateSweepPeriod)
+
+	// One semaphore shared across all listeners so the cap is a global
+	// ceiling on concurrent connections, not per-port.
+	sem := newSemaphore(maxConcurrentConns)
+
+	log.Printf("fingerprint method: %s", method)
+	blockUnknown := !*allowUnknown
+	// Run every route but the last in its own goroutine; the last holds
+	// the main goroutine so the process stays up.
+	for i, rt := range routes {
+		if i == len(routes)-1 {
+			listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem)
+		} else {
+			go listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem)
+		}
+	}
+}
+
+// route is a single LISTEN=BACKEND mapping. port is parsed from the listen
+// address for log labels and the stored port set; 0 if it cannot be parsed.
+type route struct {
+	listen  string
+	backend string
+	port    int
+}
+
+// routeFlag collects repeated --route flags.
+type routeFlag []route
+
+func (r *routeFlag) String() string {
+	parts := make([]string, len(*r))
+	for i, rt := range *r {
+		parts[i] = rt.listen + "=" + rt.backend
+	}
+	return strings.Join(parts, ",")
+}
+
+func (r *routeFlag) Set(v string) error {
+	listen, backend, ok := strings.Cut(v, "=")
+	if !ok || listen == "" || backend == "" {
+		return fmt.Errorf("route must be LISTEN=BACKEND, got %q", v)
+	}
+	port := 0
+	if _, portStr, err := net.SplitHostPort(listen); err == nil {
+		port, _ = strconv.Atoi(portStr)
+	}
+	*r = append(*r, route{listen: listen, backend: backend, port: port})
+	return nil
+}
+
+func listenAndProxy(listen, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter, sem *semaphore) {
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		log.Fatalf("listen %s: %v", listen, err)
+	}
+	log.Printf("listening on %s -> %s", listen, backend)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Printf("accept: %v", err)
+			continue
+		}
+		// Cap total in-flight connections before spending a goroutine or
+		// backend socket on this one.
+		if !sem.acquire() {
+			clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+			log.Printf("[%s:%d] OVERLOAD at capacity, dropping connection", clientIP, port)
+			conn.Close()
+			continue
+		}
+		go func() {
+			defer sem.release()
+			handleConn(conn, backend, port, store, blockUnknown, method, alerter, limiter)
+		}()
+	}
+}
+
+func handleConn(client net.Conn, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter) {
+	defer client.Close()
+
+	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
+
+	// Drop floods before any read or DB write so a single IP cannot pin
+	// goroutines or grow the fingerprint store with randomized handshakes.
+	if !limiter.allow(clientIP) {
+		log.Printf("[%s:%d] RATELIMIT dropping connection", clientIP, port)
+		return
+	}
+
+	client.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(client, header); err != nil {
+		return
+	}
+
+	var peeked []byte
+
+	if header[0] == 0x16 { // TLS handshake record
+		bodyLen := int(header[3])<<8 | int(header[4])
+		if bodyLen > maxTLSRecordBody {
+			log.Printf("[%s:%d] TLS record too large: %d", clientIP, port, bodyLen)
+			return
+		}
+		body := make([]byte, bodyLen)
+		if _, err := io.ReadFull(client, body); err != nil {
+			return
+		}
+		peeked = append(header, body...)
+
+		fp, meta, err := extractTLSMetadata(peeked, method)
+		if err != nil {
+			log.Printf("[%s:%d] JA3 error: %v", clientIP, port, err)
+			if blockUnknown {
+				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
+				return
+			}
+		} else {
+			status, err := store.Seen(fp, clientIP, port, meta, blockUnknown)
+			if err != nil {
+				log.Printf("[%s:%d] store error: %v; failing closed", clientIP, port, err)
+				return
+			}
+			switch status {
+			case StatusBlocked:
+				log.Printf("[%s:%d] BLOCKED  fp=%s", clientIP, port, fp)
+				alerter.AlertBlocked(store, clientIP, port, fp, meta)
+				return
+			case StatusPending:
+				log.Printf("[%s:%d] PENDING  fp=%s sni=%q alpn=%q ja3=%s ja4=%s", clientIP, port, fp, sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4)
+			case StatusApproved:
+				log.Printf("[%s:%d] APPROVED fp=%s", clientIP, port, fp)
+			}
+		}
+	} else {
+		peeked = header
+		if blockUnknown {
+			log.Printf("[%s:%d] BLOCKED  non-TLS connection", clientIP, port)
+			return
+		}
+		log.Printf("[%s:%d] ALLOWED  non-TLS connection", clientIP, port)
+	}
+
+	client.SetReadDeadline(time.Time{})
+
+	upstream, err := net.DialTimeout("tcp", backend, 10*time.Second)
+	if err != nil {
+		log.Printf("[%s:%d] dial backend: %v", clientIP, port, err)
+		return
+	}
+	defer upstream.Close()
+
+	if _, err := upstream.Write(peeked); err != nil {
+		return
+	}
+
+	// Bound idle time on the proxied stream so half-open / slowloris
+	// connections cannot pin goroutines and backend sockets forever.
+	pump := func(dst, src net.Conn) {
+		buf := make([]byte, 32*1024)
+		for {
+			src.SetReadDeadline(time.Now().Add(idleTimeout))
+			n, rerr := src.Read(buf)
+			if n > 0 {
+				dst.SetWriteDeadline(time.Now().Add(idleTimeout))
+				if _, werr := dst.Write(buf[:n]); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}
+
+	done := make(chan struct{}, 2)
+	go func() { pump(upstream, client); done <- struct{}{} }()
+	go func() { pump(client, upstream); done <- struct{}{} }()
+	<-done
+}
+
+func sanitizeLog(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// sanitizeAlertField prepares an attacker-controlled value (notably SNI) for
+// inclusion in a Mattermost message. On top of stripping control characters
+// it removes backticks, so the value cannot break out of the code span it is
+// wrapped in to inject markdown, links, or @mentions into the channel.
+func sanitizeAlertField(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '`' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func ensureDir(path string) error {
+	return os.MkdirAll(path, 0750)
+}

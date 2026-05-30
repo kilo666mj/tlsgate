@@ -1,0 +1,5 @@
+[tlsgate]
+# imap_backend/smtp_backend keep the mail defaults (ports 993/465).
+# For non-mail or extra routes, drop these and set a `routes` list in
+# group_vars, e.g. routes=[{listen: '[::]:993', backend: '127.0.0.1:10993'}].
+mx  ansible_host=mx  imap_backend=127.0.0.1:10993  smtp_backend=127.0.0.1:10465
