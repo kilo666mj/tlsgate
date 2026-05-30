@@ -1,0 +1,59 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    "docker:pinDigests"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": [
+    "before 5am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 1,
+  "enabledManagers": [
+    "gomod",
+    "dockerfile",
+    "docker-compose",
+    "github-actions"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "description": "Group low-risk Go module updates",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "groupName": "Go module updates"
+    },
+    {
+      "description": "Require review for major Go module updates",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Keep Go Docker base image updates separate",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "golang"
+      ],
+      "groupName": "Go Docker base image"
+    }
+  ]
+}
