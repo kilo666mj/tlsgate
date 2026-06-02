@@ -126,12 +126,12 @@ func TestValidFingerprintForMethod(t *testing.T) {
 	}{
 		{MethodJA3, ja3, true},
 		{MethodJA3, ja4, false},
-		{MethodJA3, "ecdf4f49", false},            // too short
+		{MethodJA3, "ecdf4f49", false},                         // too short
 		{MethodJA3, "ECDF4F49DD59EFFC439639DA29186671", false}, // uppercase
 		{MethodJA4, ja4, true},
 		{MethodJA4, ja3, false},
 		{MethodJA4, "t13d1516h2_8daaf6152771", false}, // missing section c
-		{"", ja3, true},                                // unset: accept either
+		{"", ja3, true},                               // unset: accept either
 		{"", ja4, true},
 		{"", "not-a-fingerprint", false},
 	}
