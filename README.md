@@ -170,10 +170,6 @@ tlsgate reset --fingerprint ja4
 All commands accept `--db <path>` to point at a non-default database.
 Default database: `/var/lib/tlsgate/db.sqlite`
 
-On first startup with an empty SQLite database, existing entries from
-`/var/lib/tlsgate/db.json` are imported automatically if that legacy
-JSON file exists.
-
 When tlsgate is running with Docker Compose, run management commands inside the
 running service container so they use the same mounted database:
 
@@ -254,10 +250,6 @@ the clear.
 `notification_mode` defaults to `failover`, which tries URLs in order and stops
 after the first successful delivery. Set it to `broadcast` to send every alert
 to every URL and treat any failed destination as a failed delivery.
-
-Older `mattermost_*` Ansible variables and JSON `mattermost` config are still
-accepted as a compatibility fallback, but new config should use
-`notification_urls`.
 
 ```json
 {

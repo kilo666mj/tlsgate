@@ -35,35 +35,6 @@ func TestLoadConfigAndAlertRangeParsing(t *testing.T) {
 	}
 }
 
-func TestLoadConfigConvertsLegacyMattermost(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	data := `{
-		"mattermost": {
-			"primary_url": "https://matter.example/hooks/primary-token",
-			"secondary_url": "https://matter2.example/hooks/secondary-token",
-			"channel": "#mail",
-			"username": "tlsgate",
-			"icon_url": "https://example.com/icon.png"
-		},
-		"alert_ranges": [{"name": "test-range", "cidrs": ["192.0.2.0/24"]}]
-	}`
-	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := loadConfig(path)
-	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
-	}
-	if len(cfg.NotificationURLs) != 2 {
-		t.Fatalf("notification_urls = %v, want two converted URLs", cfg.NotificationURLs)
-	}
-	want := "mattermost://tlsgate@matter.example/primary-token/mail?icon=https%3A%2F%2Fexample.com%2Ficon.png"
-	if cfg.NotificationURLs[0] != want {
-		t.Fatalf("primary notification URL = %q, want %q", cfg.NotificationURLs[0], want)
-	}
-}
-
 func TestLoadConfigRejectsCleartextNotificationURLs(t *testing.T) {
 	for _, rawURL := range []string{
 		"generic+http://siem.internal/hook",
