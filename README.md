@@ -152,7 +152,12 @@ tlsgate correlate <fingerprint>
 # Approve a fingerprint (optionally label it)
 tlsgate approve --label "Alice iPhone" <fingerprint>
 
-# Block a fingerprint
+# Pre-approve a fingerprint before its first connection (seed the allow-list
+# ahead of cutover so a known client is never blocked on first contact). The
+# fingerprint must be a full hash matching the database's method (ja3 or ja4).
+tlsgate approve --register --label "Alice iPhone" <fingerprint>
+
+# Block a fingerprint (--register pre-blocks one not yet seen)
 tlsgate block <fingerprint>
 
 # Label an already-approved fingerprint
