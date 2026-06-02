@@ -63,12 +63,24 @@ func computeJA4(ch *clientHello) string {
 		ja4ALPN(ch.alpnProtocols),
 	)
 
-	b := ja4Hash12(ja4HexList(sortU16(ciphers)))
+	// JA4 spec: an empty cipher or extension list hashes to literal zeros
+	// rather than sha256(""), so absence is distinguishable and interop with
+	// other JA4 tooling holds.
+	b := ja4HashSection(ja4HexList(sortU16(ciphers)))
 
 	rawC := ja4HexList(sortU16(exts)) + "_" + ja4HexList(sigAlgs)
-	c := ja4Hash12(rawC)
+	c := ja4HashSection(rawC)
 
 	return a + "_" + b + "_" + c
+}
+
+// ja4HashSection hashes a section to 12 hex chars, returning the JA4 sentinel
+// of 12 zeros when the section has no values to hash.
+func ja4HashSection(s string) string {
+	if s == "" {
+		return "000000000000"
+	}
+	return ja4Hash12(s)
 }
 
 // ja4Version maps the negotiated TLS version (highest non-GREASE value from
