@@ -74,6 +74,27 @@ func computeJA4(ch *clientHello) string {
 	return a + "_" + b + "_" + c
 }
 
+// isJA4Fingerprint reports whether s has the shape produced by computeJA4:
+// a 10-character "a" section ("t" + 9 alphanumerics) followed by two
+// 12-character lowercase-hex hash sections, joined by underscores.
+func isJA4Fingerprint(s string) bool {
+	parts := strings.Split(s, "_")
+	if len(parts) != 3 {
+		return false
+	}
+	a := parts[0]
+	if len(a) != 10 || a[0] != 't' {
+		return false
+	}
+	for _, r := range a {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'z')) {
+			return false
+		}
+	}
+	return len(parts[1]) == 12 && isLowerHex(parts[1]) &&
+		len(parts[2]) == 12 && isLowerHex(parts[2])
+}
+
 // ja4HashSection hashes a section to 12 hex chars, returning the JA4 sentinel
 // of 12 zeros when the section has no values to hash.
 func ja4HashSection(s string) string {

@@ -292,6 +292,22 @@ func (s *Store) SetStatus(fp string, status Status) error {
 	return requireAffected(res, fp)
 }
 
+// UpsertStatus sets the status of fp, creating the entry if it has not been
+// observed yet. A non-empty label is applied; an empty label leaves any
+// existing label untouched. Used by `approve`/`block --register` to seed an
+// allow/block decision before the client first connects.
+func (s *Store) UpsertStatus(fp string, status Status, label string) error {
+	now := encodeTime(time.Now())
+	_, err := s.db.Exec(`
+		INSERT INTO fingerprints (fp, status, label, first_seen, last_seen, count)
+		VALUES (?, ?, ?, ?, ?, 0)
+		ON CONFLICT(fp) DO UPDATE SET
+			status = excluded.status,
+			label = CASE WHEN excluded.label != '' THEN excluded.label ELSE fingerprints.label END`,
+		fp, status, label, now, now)
+	return err
+}
+
 func (s *Store) SetLabel(fp, label string) error {
 	res, err := s.db.Exec(`UPDATE fingerprints SET label = ? WHERE fp = ?`, label, fp)
 	if err != nil {

@@ -50,6 +50,24 @@ func ParseFingerprintMethod(s string) (FingerprintMethod, error) {
 	}
 }
 
+// isJA3Fingerprint reports whether s is a full JA3 hash: a 32-character
+// lowercase hex MD5 digest as produced by ja3FromHello.
+func isJA3Fingerprint(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	return isLowerHex(s)
+}
+
+func isLowerHex(s string) bool {
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 func isGREASE(v uint16) bool {
 	return v&0xff == v>>8 && v&0x0f == 0x0a
 }

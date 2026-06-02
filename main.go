@@ -239,14 +239,22 @@ func cmdApprove(args []string) {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
 	label := fs.String("label", "", "label for this fingerprint")
+	register := fs.Bool("register", false, "create the fingerprint if it has not been observed yet (requires a full fingerprint)")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
-		fatalf("usage: approve [--label <name>] <fingerprint>")
+		fatalf("usage: approve [--label <name>] [--register] <fingerprint>")
 	}
 	fp := fs.Arg(0)
 	store, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
+	}
+	if *register {
+		if err := registerStatus(store, fp, StatusApproved, *label); err != nil {
+			fatalf("%v", err)
+		}
+		fmt.Printf("approved %s\n", fp)
+		return
 	}
 	if err := store.SetStatus(fp, StatusApproved); err != nil {
 		fatalf("%v", err)
@@ -262,18 +270,70 @@ func cmdApprove(args []string) {
 func cmdBlock(args []string) {
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
+	label := fs.String("label", "", "label for this fingerprint")
+	register := fs.Bool("register", false, "create the fingerprint if it has not been observed yet (requires a full fingerprint)")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
-		fatalf("usage: block <fingerprint>")
+		fatalf("usage: block [--label <name>] [--register] <fingerprint>")
 	}
+	fp := fs.Arg(0)
 	store, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
-	if err := store.SetStatus(fs.Arg(0), StatusBlocked); err != nil {
+	if *register {
+		if err := registerStatus(store, fp, StatusBlocked, *label); err != nil {
+			fatalf("%v", err)
+		}
+		fmt.Printf("blocked %s\n", fp)
+		return
+	}
+	if err := store.SetStatus(fp, StatusBlocked); err != nil {
 		fatalf("%v", err)
 	}
-	fmt.Printf("blocked %s\n", fs.Arg(0))
+	if *label != "" {
+		if err := store.SetLabel(fp, *label); err != nil {
+			fatalf("%v", err)
+		}
+	}
+	fmt.Printf("blocked %s\n", fp)
+}
+
+// registerStatus seeds a status for a fingerprint that may not have been seen
+// yet. The fingerprint is validated against the database's recorded method so
+// a typo cannot create a permanent junk allow/block entry; when no method is
+// recorded yet, either a JA3 or JA4 fingerprint is accepted.
+func registerStatus(store *Store, fp string, status Status, label string) error {
+	method, err := store.GetMeta(metaFingerprintMethod)
+	if err != nil {
+		return err
+	}
+	if !validFingerprintForMethod(fp, FingerprintMethod(method)) {
+		return fmt.Errorf("--register requires a full %s fingerprint, got %q", expectedFingerprintDesc(method), fp)
+	}
+	return store.UpsertStatus(fp, status, label)
+}
+
+func validFingerprintForMethod(fp string, method FingerprintMethod) bool {
+	switch method {
+	case MethodJA3:
+		return isJA3Fingerprint(fp)
+	case MethodJA4:
+		return isJA4Fingerprint(fp)
+	default:
+		return isJA3Fingerprint(fp) || isJA4Fingerprint(fp)
+	}
+}
+
+func expectedFingerprintDesc(method string) string {
+	switch FingerprintMethod(method) {
+	case MethodJA3:
+		return "ja3"
+	case MethodJA4:
+		return "ja4"
+	default:
+		return "ja3 or ja4"
+	}
 }
 
 func cmdLabel(args []string) {

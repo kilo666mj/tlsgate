@@ -70,6 +70,78 @@ func TestCLIMutators(t *testing.T) {
 	}
 }
 
+func TestCmdRegister(t *testing.T) {
+	muteStdout(t)
+	path := filepath.Join(t.TempDir(), "db.sqlite")
+
+	seed, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := seed.ReconcileFingerprintMethod(MethodJA3, false); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	statusOf := func(fp string) (Entry, bool) {
+		s, err := NewStore(path)
+		if err != nil {
+			t.Fatalf("reopen store: %v", err)
+		}
+		entries, err := s.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		e, ok := entries[fp]
+		return e, ok
+	}
+
+	// Without --register, approving an unseen fingerprint fails.
+	if err := seed.SetStatus("ecdf4f49dd59effc439639da29186671", StatusApproved); err == nil {
+		t.Fatal("SetStatus on unseen fingerprint: expected error, got nil")
+	}
+
+	// --register creates the entry, pre-approved with a label.
+	approved := "ecdf4f49dd59effc439639da29186671"
+	cmdApprove([]string{"--db", path, "--label", "preseed", "--register", approved})
+	if e, ok := statusOf(approved); !ok || e.Status != StatusApproved || e.Label != "preseed" {
+		t.Fatalf("registered approve = (%+v, %v), want approved/preseed", e, ok)
+	}
+
+	// --register can pre-block too.
+	blocked := "16ee84a07b55074cb2751329bf1c8811"
+	cmdBlock([]string{"--db", path, "--register", blocked})
+	if e, ok := statusOf(blocked); !ok || e.Status != StatusBlocked {
+		t.Fatalf("registered block = (%+v, %v), want blocked", e, ok)
+	}
+}
+
+func TestValidFingerprintForMethod(t *testing.T) {
+	ja3 := "ecdf4f49dd59effc439639da29186671"
+	ja4 := "t13d1516h2_8daaf6152771_b186095e22b6"
+
+	cases := []struct {
+		method FingerprintMethod
+		fp     string
+		want   bool
+	}{
+		{MethodJA3, ja3, true},
+		{MethodJA3, ja4, false},
+		{MethodJA3, "ecdf4f49", false},            // too short
+		{MethodJA3, "ECDF4F49DD59EFFC439639DA29186671", false}, // uppercase
+		{MethodJA4, ja4, true},
+		{MethodJA4, ja3, false},
+		{MethodJA4, "t13d1516h2_8daaf6152771", false}, // missing section c
+		{"", ja3, true},                                // unset: accept either
+		{"", ja4, true},
+		{"", "not-a-fingerprint", false},
+	}
+	for _, c := range cases {
+		if got := validFingerprintForMethod(c.fp, c.method); got != c.want {
+			t.Errorf("validFingerprintForMethod(%q, %q) = %v, want %v", c.fp, c.method, got, c.want)
+		}
+	}
+}
+
 func TestCmdReset(t *testing.T) {
 	muteStdout(t)
 	path := filepath.Join(t.TempDir(), "db.sqlite")
