@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -87,43 +86,6 @@ func TestReconcileFingerprintMethod(t *testing.T) {
 	}
 	if method, err := store.GetMeta(metaFingerprintMethod); err != nil || method != string(MethodJA4) {
 		t.Fatalf("stored method = (%q, %v), want %q", method, err, MethodJA4)
-	}
-}
-
-func TestStoreMigratesLegacyJSON(t *testing.T) {
-	dir := t.TempDir()
-	legacy := `{"fingerprints":{"fpA":{` +
-		`"status":"approved","label":"tb","count":3,` +
-		`"first_seen":"2026-01-01T00:00:00Z","last_seen":"2026-01-02T00:00:00Z",` +
-		`"ips":["192.0.2.5"],"ports":[993],` +
-		`"tls":{"ja3":"771,4865,0-23,29,0","sni":"mail.example.com","alpn":["imap"]}}}}`
-	if err := os.WriteFile(filepath.Join(dir, "db.json"), []byte(legacy), 0644); err != nil {
-		t.Fatalf("write legacy json: %v", err)
-	}
-
-	store, err := NewStore(filepath.Join(dir, "db.sqlite"))
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	entries, err := store.List()
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	e, ok := entries["fpA"]
-	if !ok {
-		t.Fatal("fpA not migrated from legacy json")
-	}
-	if e.Status != StatusApproved || e.Label != "tb" || e.Count != 3 {
-		t.Fatalf("migrated entry = %+v, want approved/tb/count=3", e)
-	}
-	if len(e.IPs) != 1 || e.IPs[0] != "192.0.2.5" {
-		t.Fatalf("migrated IPs = %v, want [192.0.2.5]", e.IPs)
-	}
-	if len(e.Ports) != 1 || e.Ports[0] != 993 {
-		t.Fatalf("migrated Ports = %v, want [993]", e.Ports)
-	}
-	if e.TLS.SNI != "mail.example.com" {
-		t.Fatalf("migrated SNI = %q, want mail.example.com", e.TLS.SNI)
 	}
 }
 

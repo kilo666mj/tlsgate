@@ -32,23 +32,12 @@ const (
 type AppConfig struct {
 	NotificationURLs []string         `json:"notification_urls"`
 	NotificationMode NotificationMode `json:"notification_mode"`
-	// Mattermost is retained for compatibility with older configs. Prefer
-	// notification_urls with Shoutrrr service URLs for new deployments.
-	Mattermost MattermostConfig `json:"mattermost"`
 	// MaxFingerprints caps how many fingerprint entries are kept in the
 	// store, bounding disk growth from unauthenticated unknown clients.
 	// 0 means unlimited. Approved entries are never evicted; the oldest
 	// non-approved (pending/blocked) entries are pruned first.
 	MaxFingerprints int                `json:"max_fingerprints"`
 	AlertRanges     []AlertRangeConfig `json:"alert_ranges"`
-}
-
-type MattermostConfig struct {
-	PrimaryURL   string `json:"primary_url"`
-	SecondaryURL string `json:"secondary_url"`
-	Channel      string `json:"channel"`
-	IconURL      string `json:"icon_url"`
-	Username     string `json:"username"`
 }
 
 type AlertRangeConfig struct {
@@ -101,23 +90,8 @@ func loadConfig(path string) (AppConfig, error) {
 	if cfg.NotificationMode != NotificationModeFailover && cfg.NotificationMode != NotificationModeBroadcast {
 		return AppConfig{}, fmt.Errorf("notification_mode must be %q or %q, got %q", NotificationModeFailover, NotificationModeBroadcast, cfg.NotificationMode)
 	}
-	if len(cfg.NotificationURLs) == 0 && cfg.Mattermost.PrimaryURL != "" {
-		urls, err := legacyMattermostNotificationURLs(cfg.Mattermost)
-		if err != nil {
-			return AppConfig{}, err
-		}
-		cfg.NotificationURLs = urls
-	}
-	// Legacy webhook URLs carry alert content and secret tokens; require TLS
-	// so an accidental http:// endpoint cannot leak them in cleartext.
-	if err := requireHTTPS("mattermost.primary_url", cfg.Mattermost.PrimaryURL); err != nil {
-		return AppConfig{}, err
-	}
-	if err := requireHTTPS("mattermost.secondary_url", cfg.Mattermost.SecondaryURL); err != nil {
-		return AppConfig{}, err
-	}
-	// Notification URLs carry the same alert content and webhook tokens, so
-	// hold them to the same no-cleartext guarantee as the legacy fields.
+	// Notification URLs carry alert content and webhook tokens, so require
+	// TLS: reject any URL that would deliver them in cleartext.
 	for _, rawURL := range cfg.NotificationURLs {
 		if err := requireSecureNotificationURL(rawURL); err != nil {
 			return AppConfig{}, err
@@ -151,16 +125,6 @@ func requireSecureNotificationURL(rawURL string) error {
 				return fmt.Errorf("notification URL %s://%s sets disabletls; remove it so alerts stay encrypted", scheme, u.Host)
 			}
 		}
-	}
-	return nil
-}
-
-func requireHTTPS(field, rawURL string) error {
-	if rawURL == "" {
-		return nil
-	}
-	if !strings.HasPrefix(rawURL, "https://") {
-		return fmt.Errorf("%s must be an https:// URL", field)
 	}
 	return nil
 }
@@ -365,51 +329,4 @@ func shoutrrrErrors(errs []error) error {
 		return fmt.Errorf("%s", strings.Join(parts, "; "))
 	}
 	return nil
-}
-
-func legacyMattermostNotificationURLs(cfg MattermostConfig) ([]string, error) {
-	var urls []string
-	for _, raw := range []string{cfg.PrimaryURL, cfg.SecondaryURL} {
-		if raw == "" {
-			continue
-		}
-		converted, err := legacyMattermostNotificationURL(raw, cfg)
-		if err != nil {
-			return nil, err
-		}
-		urls = append(urls, converted)
-	}
-	return urls, nil
-}
-
-func legacyMattermostNotificationURL(raw string, cfg MattermostConfig) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("parse mattermost webhook URL: %w", err)
-	}
-	if u.Scheme != "https" {
-		return "", fmt.Errorf("mattermost webhook URL must be https://")
-	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) == 0 || parts[len(parts)-1] == "" {
-		return "", fmt.Errorf("mattermost webhook URL has no token: %s", raw)
-	}
-
-	out := url.URL{
-		Scheme: "mattermost",
-		Host:   u.Host,
-		Path:   "/" + parts[len(parts)-1],
-	}
-	if cfg.Username != "" {
-		out.User = url.User(cfg.Username)
-	}
-	if cfg.Channel != "" {
-		out.Path += "/" + strings.TrimPrefix(cfg.Channel, "#")
-	}
-	if cfg.IconURL != "" {
-		q := out.Query()
-		q.Set("icon", cfg.IconURL)
-		out.RawQuery = q.Encode()
-	}
-	return out.String(), nil
 }

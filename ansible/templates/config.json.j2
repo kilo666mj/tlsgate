@@ -1,13 +1,6 @@
 {
   "notification_urls": {{ notification_urls | default([]) | to_nice_json }},
   "notification_mode": {{ notification_mode | default('failover') | to_json }},
-  "mattermost": {
-    "primary_url": {{ mattermost_primary_url | default('') | to_json }},
-    "secondary_url": {{ mattermost_secondary_url | default('') | to_json }},
-    "channel": {{ mattermost_channel | default('#logw') | to_json }},
-    "username": {{ mattermost_username | default('tlsgate') | to_json }},
-    "icon_url": {{ mattermost_icon_url | default('') | to_json }}
-  },
   "max_fingerprints": {{ max_fingerprints | default(0) | int }},
   "alert_ranges": {{ alert_ranges | default([]) | to_nice_json }}
 }

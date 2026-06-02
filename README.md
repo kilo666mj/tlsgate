@@ -27,9 +27,10 @@ is the allow/block key. Both are always computed and recorded; only the key
 used for decisions changes. The store key changes with the method, so the
 database records which method built it: starting `serve` with a different
 `--fingerprint` than the stored one **refuses to start** rather than silently
-orphaning every approval and block. Pass `--reset-fingerprints` to purge the
-stored fingerprints and rebuild under the new method (you re-approve clients
-afterward).
+orphaning every approval and block. To switch, either purge ahead of time with
+`tlsgate reset --fingerprint <new>` (a one-off that exits) or pass
+`serve --reset-fingerprints` to purge during startup. Either way you re-approve
+clients afterward.
 
 - **JA3** — MD5 over TLS version, cipher list, extension list, curves, and EC
   point formats. Order-sensitive: a client that shuffles its TLS extension order
@@ -159,14 +160,15 @@ tlsgate label <fingerprint> "Alice MacBook"
 
 # Delete a fingerprint entry
 tlsgate delete <fingerprint>
+
+# Purge all fingerprints (one-off, e.g. before switching ja3<->ja4).
+# Pass --fingerprint to also record the new method so the next serve starts
+# clean; omit it to wipe while keeping the current method.
+tlsgate reset --fingerprint ja4
 ```
 
 All commands accept `--db <path>` to point at a non-default database.
 Default database: `/var/lib/tlsgate/db.sqlite`
-
-On first startup with an empty SQLite database, existing entries from
-`/var/lib/tlsgate/db.json` are imported automatically if that legacy
-JSON file exists.
 
 When tlsgate is running with Docker Compose, run management commands inside the
 running service container so they use the same mounted database:
@@ -248,10 +250,6 @@ the clear.
 `notification_mode` defaults to `failover`, which tries URLs in order and stops
 after the first successful delivery. Set it to `broadcast` to send every alert
 to every URL and treat any failed destination as a failed delivery.
-
-Older `mattermost_*` Ansible variables and JSON `mattermost` config are still
-accepted as a compatibility fallback, but new config should use
-`notification_urls`.
 
 ```json
 {

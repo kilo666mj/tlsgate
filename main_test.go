@@ -70,6 +70,46 @@ func TestCLIMutators(t *testing.T) {
 	}
 }
 
+func TestCmdReset(t *testing.T) {
+	muteStdout(t)
+	path := filepath.Join(t.TempDir(), "db.sqlite")
+
+	seed, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := seed.ReconcileFingerprintMethod(MethodJA3, false); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, err := seed.Seen("fp1", "192.0.2.10", 993, TLSMetadata{}, false); err != nil {
+		t.Fatalf("Seen: %v", err)
+	}
+
+	// Reset and switch the recorded method in one shot.
+	cmdReset([]string{"--db", path, "--fingerprint", "ja4"})
+
+	check, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	entries, err := check.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries after reset = %d, want 0", len(entries))
+	}
+	if method, err := check.GetMeta(metaFingerprintMethod); err != nil || method != string(MethodJA4) {
+		t.Fatalf("stored method = (%q, %v), want %q", method, err, MethodJA4)
+	}
+
+	// A plain reset (no --fingerprint) keeps the recorded method.
+	cmdReset([]string{"--db", path})
+	if method, err := check.GetMeta(metaFingerprintMethod); err != nil || method != string(MethodJA4) {
+		t.Fatalf("method after plain reset = (%q, %v), want %q", method, err, MethodJA4)
+	}
+}
+
 func TestListEntryOrder(t *testing.T) {
 	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	entries := map[string]Entry{

@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -30,10 +28,6 @@ type Entry struct {
 	Ports     []int       `json:"ports,omitempty"`
 	Count     int         `json:"count"`
 	TLS       TLSMetadata `json:"tls,omitempty"`
-}
-
-type legacyStoreFile struct {
-	Fingerprints map[string]*Entry `json:"fingerprints"`
 }
 
 type Store struct {
@@ -107,7 +101,7 @@ func (s *Store) init() error {
 	if err := s.addColumnIfMissing(ctx, "fingerprints", "ja4", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return s.migrateLegacyJSON(ctx)
+	return nil
 }
 
 // metaFingerprintMethod is the meta key recording which fingerprint method
@@ -202,53 +196,6 @@ func (s *Store) addColumnIfMissing(ctx context.Context, table, column, def strin
 	}
 	_, err = s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, def))
 	return err
-}
-
-func (s *Store) migrateLegacyJSON(ctx context.Context) error {
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fingerprints`).Scan(&count); err != nil {
-		return err
-	}
-	if count != 0 {
-		return nil
-	}
-
-	legacyPath := filepath.Join(filepath.Dir(s.path), "db.json")
-	if _, err := os.Stat(legacyPath); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-
-	f, err := os.Open(legacyPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	var legacy legacyStoreFile
-	if err := json.NewDecoder(f).Decode(&legacy); err != nil {
-		return fmt.Errorf("migrate legacy JSON: %w", err)
-	}
-	if legacy.Fingerprints == nil {
-		return nil
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	for fp, entry := range legacy.Fingerprints {
-		if entry == nil {
-			continue
-		}
-		if err := upsertEntry(ctx, tx, fp, *entry); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 func (s *Store) Seen(fp, ip string, port int, meta TLSMetadata, blockUnknown bool) (Status, error) {
@@ -452,53 +399,6 @@ func (s *Store) HasBlockedRangeAlert(rangeName, ip string) (bool, error) {
 func (s *Store) ForgetBlockedRangeAlert(rangeName, ip string) error {
 	_, err := s.db.Exec(`DELETE FROM blocked_range_alerts WHERE range_name = ? AND ip = ?`, rangeName, ip)
 	return err
-}
-
-func upsertEntry(ctx context.Context, tx *sql.Tx, fp string, e Entry) error {
-	if e.FirstSeen.IsZero() {
-		e.FirstSeen = time.Now()
-	}
-	if e.LastSeen.IsZero() {
-		e.LastSeen = e.FirstSeen
-	}
-	if e.Status == "" {
-		e.Status = StatusPending
-	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO fingerprints (
-			fp, status, label, first_seen, last_seen, count,
-			ja3, ja4, sni, alpn, supported_versions, signature_algorithms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(fp) DO UPDATE SET
-			status = excluded.status,
-			label = excluded.label,
-			first_seen = excluded.first_seen,
-			last_seen = excluded.last_seen,
-			count = excluded.count,
-			ja3 = excluded.ja3,
-			ja4 = excluded.ja4,
-			sni = excluded.sni,
-			alpn = excluded.alpn,
-			supported_versions = excluded.supported_versions,
-			signature_algorithms = excluded.signature_algorithms`,
-		fp, e.Status, e.Label, encodeTime(e.FirstSeen), encodeTime(e.LastSeen), e.Count,
-		e.TLS.JA3, e.TLS.JA4, e.TLS.SNI, encodeStrings(e.TLS.ALPN),
-		encodeU16s(e.TLS.SupportedVersions), encodeU16s(e.TLS.SignatureAlgorithms),
-	)
-	if err != nil {
-		return err
-	}
-	for _, ip := range e.IPs {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO fingerprint_ips (fp, ip) VALUES (?, ?)`, fp, ip); err != nil {
-			return err
-		}
-	}
-	for _, port := range e.Ports {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO fingerprint_ports (fp, port) VALUES (?, ?)`, fp, port); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func requireAffected(res sql.Result, fp string) error {
