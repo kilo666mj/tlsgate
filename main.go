@@ -25,6 +25,7 @@ Commands:
   block    Block a fingerprint
   label    Set a label on a fingerprint
   delete   Delete a fingerprint
+  reset    Purge all stored fingerprints (e.g. before a ja3/ja4 switch)
   version  Print the build version
 `
 
@@ -48,6 +49,8 @@ func main() {
 		cmdLabel(os.Args[2:])
 	case "delete":
 		cmdDelete(os.Args[2:])
+	case "reset":
+		cmdReset(os.Args[2:])
 	case "version", "--version", "-version":
 		fmt.Printf("tlsgate %s\n", version)
 	default:
@@ -305,6 +308,48 @@ func cmdDelete(args []string) {
 		fatalf("%v", err)
 	}
 	fmt.Printf("deleted %s\n", fs.Arg(0))
+}
+
+func cmdReset(args []string) {
+	fs := flag.NewFlagSet("reset", flag.ExitOnError)
+	dbPath := fs.String("db", defaultDB, "database path")
+	fingerprint := fs.String("fingerprint", "", "fingerprint method to record after the reset: ja3 or ja4 (default: keep the database's current method)")
+	fs.Parse(args)
+
+	store, err := NewStore(*dbPath)
+	if err != nil {
+		fatalf("open store: %v", err)
+	}
+
+	// An explicit --fingerprint records that method after purging (the usual
+	// case before a ja3<->ja4 switch); otherwise keep whatever the database
+	// already records so a plain reset does not change the keyspace.
+	var method FingerprintMethod
+	if *fingerprint == "" {
+		stored, err := store.GetMeta(metaFingerprintMethod)
+		if err != nil {
+			fatalf("read stored method: %v", err)
+		}
+		method = FingerprintMethod(stored)
+	} else {
+		method, err = ParseFingerprintMethod(*fingerprint)
+		if err != nil {
+			fatalf("%v", err)
+		}
+	}
+
+	purged, err := store.ResetFingerprints()
+	if err != nil {
+		fatalf("reset fingerprints: %v", err)
+	}
+	if method != "" {
+		if err := store.SetMeta(metaFingerprintMethod, string(method)); err != nil {
+			fatalf("record method: %v", err)
+		}
+		fmt.Printf("reset %d fingerprint(s); method recorded as %s\n", purged, method)
+		return
+	}
+	fmt.Printf("reset %d fingerprint(s)\n", purged)
 }
 
 func fatalf(format string, args ...any) {
