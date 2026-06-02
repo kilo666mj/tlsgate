@@ -90,7 +90,9 @@ func (rl *rateLimiter) runSweeper(interval time.Duration) {
 	if rl == nil {
 		return
 	}
-	for range time.Tick(interval) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
 		rl.sweep()
 	}
 }
