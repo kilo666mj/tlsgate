@@ -116,7 +116,43 @@ func loadConfig(path string) (AppConfig, error) {
 	if err := requireHTTPS("mattermost.secondary_url", cfg.Mattermost.SecondaryURL); err != nil {
 		return AppConfig{}, err
 	}
+	// Notification URLs carry the same alert content and webhook tokens, so
+	// hold them to the same no-cleartext guarantee as the legacy fields.
+	for _, rawURL := range cfg.NotificationURLs {
+		if err := requireSecureNotificationURL(rawURL); err != nil {
+			return AppConfig{}, err
+		}
+	}
 	return cfg, nil
+}
+
+// requireSecureNotificationURL rejects Shoutrrr notification URLs that would
+// deliver alert content and webhook tokens over cleartext. Shoutrrr opts into
+// plaintext either via a "+http" scheme suffix (e.g. generic+http://) or a
+// disabletls query parameter, so reject both.
+func requireSecureNotificationURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parse notification_urls entry: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "http" || strings.HasSuffix(scheme, "+http") {
+		return fmt.Errorf("notification URL %s://%s uses cleartext transport; use an https/+https service URL", scheme, u.Host)
+	}
+	// Shoutrrr matches query keys case-insensitively, so normalize before
+	// looking for a disabletls override.
+	for key, vals := range u.Query() {
+		if strings.ToLower(key) != "disabletls" {
+			continue
+		}
+		for _, v := range vals {
+			switch strings.ToLower(v) {
+			case "yes", "true", "1", "on":
+				return fmt.Errorf("notification URL %s://%s sets disabletls; remove it so alerts stay encrypted", scheme, u.Host)
+			}
+		}
+	}
+	return nil
 }
 
 func requireHTTPS(field, rawURL string) error {

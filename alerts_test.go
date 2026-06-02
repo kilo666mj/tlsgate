@@ -64,6 +64,47 @@ func TestLoadConfigConvertsLegacyMattermost(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsCleartextNotificationURLs(t *testing.T) {
+	for _, rawURL := range []string{
+		"generic+http://siem.internal/hook",
+		"generic://siem.internal/hook?disabletls=yes",
+		"gotify://gotify.internal/token?disableTLS=true",
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		data := `{
+			"notification_urls": ["` + rawURL + `"],
+			"alert_ranges": [{"name": "test-range", "cidrs": ["192.0.2.0/24"]}]
+		}`
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if _, err := loadConfig(path); err == nil {
+			t.Fatalf("loadConfig accepted cleartext URL %q, want error", rawURL)
+		}
+	}
+}
+
+func TestLoadConfigAllowsSecureNotificationURLs(t *testing.T) {
+	for _, rawURL := range []string{
+		"logger://",
+		"generic+https://siem.internal/hook",
+		"mattermost://tlsgate@matter.example/token/channel",
+		"slack://tlsgate@token-a/token-b/token-c",
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		data := `{
+			"notification_urls": ["` + rawURL + `"],
+			"alert_ranges": [{"name": "test-range", "cidrs": ["192.0.2.0/24"]}]
+		}`
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if _, err := loadConfig(path); err != nil {
+			t.Fatalf("loadConfig rejected secure URL %q: %v", rawURL, err)
+		}
+	}
+}
+
 func TestBlockedRangeAlerterDedupesByRangeAndIP(t *testing.T) {
 	store := newTestStore(t)
 	alerter := newTestAlerter(t, "scanner-net", "192.0.2.0/24")

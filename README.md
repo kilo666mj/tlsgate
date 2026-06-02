@@ -234,7 +234,10 @@ private network ranges.
 
 `notification_urls` are Shoutrrr service URLs, so the same alert path can send
 to Mattermost, Slack, Discord, Gotify, Matrix, Teams, Telegram, generic
-webhooks, email, and other supported services.
+webhooks, email, and other supported services. tlsgate refuses to start if a
+notification URL would deliver over cleartext (an `+http` scheme or a
+`disabletls` override), so alert content and webhook tokens are never sent in
+the clear.
 
 `notification_mode` defaults to `failover`, which tries URLs in order and stops
 after the first successful delivery. Set it to `broadcast` to send every alert
