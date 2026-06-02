@@ -1,17 +1,18 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/containrrr/shoutrrr"
+	"github.com/containrrr/shoutrrr/pkg/types"
 )
 
 const defaultConfig = "/var/lib/tlsgate/config.json"
@@ -21,7 +22,18 @@ const (
 	alertWorkerCount = 4
 )
 
+type NotificationMode string
+
+const (
+	NotificationModeFailover  NotificationMode = "failover"
+	NotificationModeBroadcast NotificationMode = "broadcast"
+)
+
 type AppConfig struct {
+	NotificationURLs []string         `json:"notification_urls"`
+	NotificationMode NotificationMode `json:"notification_mode"`
+	// Mattermost is retained for compatibility with older configs. Prefer
+	// notification_urls with Shoutrrr service URLs for new deployments.
 	Mattermost MattermostConfig `json:"mattermost"`
 	// MaxFingerprints caps how many fingerprint entries are kept in the
 	// store, bounding disk growth from unauthenticated unknown clients.
@@ -51,8 +63,7 @@ type blockedRange struct {
 
 type BlockedRangeAlerter struct {
 	ranges  []blockedRange
-	mm      MattermostConfig
-	send    func(MattermostConfig, string) error
+	send    func(string) error
 	queue   chan blockedRangeAlert
 	mu      sync.Mutex
 	pending map[string]struct{}
@@ -64,13 +75,6 @@ type blockedRangeAlert struct {
 	ip        string
 	fp        string
 	message   string
-}
-
-type mattermostPayload struct {
-	Username string `json:"username,omitempty"`
-	Channel  string `json:"channel,omitempty"`
-	Text     string `json:"text"`
-	IconURL  string `json:"icon_url,omitempty"`
 }
 
 func loadConfig(path string) (AppConfig, error) {
@@ -91,8 +95,21 @@ func loadConfig(path string) (AppConfig, error) {
 	if cfg.MaxFingerprints < 0 {
 		return AppConfig{}, fmt.Errorf("max_fingerprints must be >= 0, got %d", cfg.MaxFingerprints)
 	}
-	// Webhook URLs carry alert content and secret tokens; require TLS so an
-	// accidental http:// endpoint cannot leak them in cleartext.
+	if cfg.NotificationMode == "" {
+		cfg.NotificationMode = NotificationModeFailover
+	}
+	if cfg.NotificationMode != NotificationModeFailover && cfg.NotificationMode != NotificationModeBroadcast {
+		return AppConfig{}, fmt.Errorf("notification_mode must be %q or %q, got %q", NotificationModeFailover, NotificationModeBroadcast, cfg.NotificationMode)
+	}
+	if len(cfg.NotificationURLs) == 0 && cfg.Mattermost.PrimaryURL != "" {
+		urls, err := legacyMattermostNotificationURLs(cfg.Mattermost)
+		if err != nil {
+			return AppConfig{}, err
+		}
+		cfg.NotificationURLs = urls
+	}
+	// Legacy webhook URLs carry alert content and secret tokens; require TLS
+	// so an accidental http:// endpoint cannot leak them in cleartext.
 	if err := requireHTTPS("mattermost.primary_url", cfg.Mattermost.PrimaryURL); err != nil {
 		return AppConfig{}, err
 	}
@@ -116,12 +133,18 @@ func NewBlockedRangeAlerter(cfg AppConfig) (*BlockedRangeAlerter, error) {
 	if len(cfg.AlertRanges) == 0 {
 		return nil, nil
 	}
-	if cfg.Mattermost.PrimaryURL == "" {
-		return nil, fmt.Errorf("mattermost primary_url is required when alert_ranges are configured")
+	if cfg.NotificationMode == "" {
+		cfg.NotificationMode = NotificationModeFailover
+	}
+	if len(cfg.NotificationURLs) == 0 {
+		return nil, fmt.Errorf("notification_urls is required when alert_ranges are configured")
+	}
+	send, err := newNotificationSender(cfg.NotificationURLs, cfg.NotificationMode)
+	if err != nil {
+		return nil, fmt.Errorf("initialize notification sender: %w", err)
 	}
 	a := &BlockedRangeAlerter{
-		mm:      cfg.Mattermost,
-		send:    sendMattermost,
+		send:    send,
 		queue:   make(chan blockedRangeAlert, alertQueueSize),
 		pending: make(map[string]struct{}),
 	}
@@ -186,7 +209,7 @@ func (a *BlockedRangeAlerter) startWorkers(n int) {
 	for range n {
 		go func() {
 			for alert := range a.queue {
-				if err := a.send(a.mm, alert.message); err != nil {
+				if err := a.send(alert.message); err != nil {
 					a.clearPending(alert.rangeName, alert.ip)
 					log.Printf("[%s] blocked range alert send failed: %v", alert.ip, err)
 					continue
@@ -248,46 +271,109 @@ func blockedRangeMessage(rangeName, ip string, port int, fp string, meta TLSMeta
 	return ":warning: blocked TLS connection from known range: " + strings.Join(fields, " ")
 }
 
-func sendMattermost(cfg MattermostConfig, text string) error {
-	if cfg.PrimaryURL == "" {
-		return nil
+func newNotificationSender(urls []string, mode NotificationMode) (func(string) error, error) {
+	switch mode {
+	case NotificationModeFailover:
+		senders := make([]func(string, *types.Params) []error, 0, len(urls))
+		for _, rawURL := range urls {
+			sender, err := shoutrrr.CreateSender(rawURL)
+			if err != nil {
+				return nil, err
+			}
+			senders = append(senders, sender.Send)
+		}
+		return sendShoutrrrFailover(senders), nil
+	case NotificationModeBroadcast:
+		sender, err := shoutrrr.CreateSender(urls...)
+		if err != nil {
+			return nil, err
+		}
+		return sendShoutrrrBroadcast(sender.Send), nil
+	default:
+		return nil, fmt.Errorf("unknown notification mode %q", mode)
 	}
-	username := cfg.Username
-	if username == "" {
-		username = "tlsgate"
-	}
-	payload := mattermostPayload{
-		Username: username,
-		Channel:  cfg.Channel,
-		Text:     text,
-		IconURL:  cfg.IconURL,
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	if err := postMattermost(cfg.PrimaryURL, body); err == nil {
-		return nil
-	} else if cfg.SecondaryURL == "" {
-		return err
-	}
-	return postMattermost(cfg.SecondaryURL, body)
 }
 
-func postMattermost(url string, body []byte) error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return err
+func sendShoutrrrFailover(senders []func(string, *types.Params) []error) func(string) error {
+	return func(text string) error {
+		var parts []string
+		for _, send := range senders {
+			errs := send(text, nil)
+			err := shoutrrrErrors(errs)
+			if err == nil {
+				return nil
+			}
+			parts = append(parts, err.Error())
+		}
+		return fmt.Errorf("notification send failed: %s", strings.Join(parts, "; "))
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
+}
+
+func sendShoutrrrBroadcast(send func(string, *types.Params) []error) func(string) error {
+	return func(text string) error {
+		if err := shoutrrrErrors(send(text, nil)); err != nil {
+			return fmt.Errorf("notification send failed: %w", err)
+		}
+		return nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("mattermost webhook returned %s", resp.Status)
+}
+
+func shoutrrrErrors(errs []error) error {
+	var parts []string
+	for _, err := range errs {
+		if err != nil {
+			parts = append(parts, err.Error())
+		}
+	}
+	if len(parts) > 0 {
+		return fmt.Errorf("%s", strings.Join(parts, "; "))
 	}
 	return nil
+}
+
+func legacyMattermostNotificationURLs(cfg MattermostConfig) ([]string, error) {
+	var urls []string
+	for _, raw := range []string{cfg.PrimaryURL, cfg.SecondaryURL} {
+		if raw == "" {
+			continue
+		}
+		converted, err := legacyMattermostNotificationURL(raw, cfg)
+		if err != nil {
+			return nil, err
+		}
+		urls = append(urls, converted)
+	}
+	return urls, nil
+}
+
+func legacyMattermostNotificationURL(raw string, cfg MattermostConfig) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse mattermost webhook URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("mattermost webhook URL must be https://")
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) == 0 || parts[len(parts)-1] == "" {
+		return "", fmt.Errorf("mattermost webhook URL has no token: %s", raw)
+	}
+
+	out := url.URL{
+		Scheme: "mattermost",
+		Host:   u.Host,
+		Path:   "/" + parts[len(parts)-1],
+	}
+	if cfg.Username != "" {
+		out.User = url.User(cfg.Username)
+	}
+	if cfg.Channel != "" {
+		out.Path += "/" + strings.TrimPrefix(cfg.Channel, "#")
+	}
+	if cfg.IconURL != "" {
+		q := out.Query()
+		q.Set("icon", cfg.IconURL)
+		out.RawQuery = q.Encode()
+	}
+	return out.String(), nil
 }

@@ -8,12 +8,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/containrrr/shoutrrr/pkg/types"
 )
 
 func TestLoadConfigAndAlertRangeParsing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	data := `{
-		"mattermost": {"primary_url": "https://matter.example/hook", "channel": "#mail"},
+		"notification_urls": ["logger://"],
 		"alert_ranges": [{"name": "test-range", "cidrs": ["192.0.2.0/24", "2001:db8::/32"]}]
 	}`
 	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
@@ -33,11 +35,40 @@ func TestLoadConfigAndAlertRangeParsing(t *testing.T) {
 	}
 }
 
+func TestLoadConfigConvertsLegacyMattermost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := `{
+		"mattermost": {
+			"primary_url": "https://matter.example/hooks/primary-token",
+			"secondary_url": "https://matter2.example/hooks/secondary-token",
+			"channel": "#mail",
+			"username": "tlsgate",
+			"icon_url": "https://example.com/icon.png"
+		},
+		"alert_ranges": [{"name": "test-range", "cidrs": ["192.0.2.0/24"]}]
+	}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.NotificationURLs) != 2 {
+		t.Fatalf("notification_urls = %v, want two converted URLs", cfg.NotificationURLs)
+	}
+	want := "mattermost://tlsgate@matter.example/primary-token/mail?icon=https%3A%2F%2Fexample.com%2Ficon.png"
+	if cfg.NotificationURLs[0] != want {
+		t.Fatalf("primary notification URL = %q, want %q", cfg.NotificationURLs[0], want)
+	}
+}
+
 func TestBlockedRangeAlerterDedupesByRangeAndIP(t *testing.T) {
 	store := newTestStore(t)
 	alerter := newTestAlerter(t, "scanner-net", "192.0.2.0/24")
 	messages := make(chan string, 4)
-	alerter.send = func(_ MattermostConfig, text string) error {
+	alerter.send = func(text string) error {
 		messages <- text
 		return nil
 	}
@@ -69,9 +100,9 @@ func TestBlockedRangeAlerterRetriesAfterSendFailure(t *testing.T) {
 	store := newTestStore(t)
 	alerter := newTestAlerter(t, "scanner-net", "192.0.2.0/24")
 	var attempts atomic.Int32
-	alerter.send = func(_ MattermostConfig, _ string) error {
+	alerter.send = func(_ string) error {
 		if attempts.Add(1) == 1 {
-			return errors.New("mattermost down")
+			return errors.New("notifications down")
 		}
 		return nil
 	}
@@ -85,10 +116,66 @@ func TestBlockedRangeAlerterRetriesAfterSendFailure(t *testing.T) {
 	}
 }
 
+func TestShoutrrrFailoverStopsAfterSuccess(t *testing.T) {
+	var primaryCalls, secondaryCalls atomic.Int32
+	send := sendShoutrrrFailover([]func(string, *types.Params) []error{
+		func(_ string, _ *types.Params) []error {
+			primaryCalls.Add(1)
+			return []error{errors.New("primary down")}
+		},
+		func(_ string, _ *types.Params) []error {
+			secondaryCalls.Add(1)
+			return []error{nil}
+		},
+		func(_ string, _ *types.Params) []error {
+			t.Fatal("third sender should not be called after successful failover")
+			return nil
+		},
+	})
+
+	if err := send("test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if primaryCalls.Load() != 1 || secondaryCalls.Load() != 1 {
+		t.Fatalf("calls primary=%d secondary=%d, want 1/1", primaryCalls.Load(), secondaryCalls.Load())
+	}
+}
+
+func TestShoutrrrFailoverFailsAfterAllSendersFail(t *testing.T) {
+	send := sendShoutrrrFailover([]func(string, *types.Params) []error{
+		func(_ string, _ *types.Params) []error { return []error{errors.New("primary down")} },
+		func(_ string, _ *types.Params) []error { return []error{errors.New("secondary down")} },
+	})
+
+	err := send("test")
+	if err == nil {
+		t.Fatal("send succeeded, want failure")
+	}
+	for _, want := range []string{"primary down", "secondary down"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestShoutrrrBroadcastRequiresAllSenders(t *testing.T) {
+	send := sendShoutrrrBroadcast(func(_ string, _ *types.Params) []error {
+		return []error{nil, errors.New("secondary down")}
+	})
+
+	err := send("test")
+	if err == nil {
+		t.Fatal("send succeeded, want failure")
+	}
+	if !strings.Contains(err.Error(), "secondary down") {
+		t.Fatalf("error %q missing secondary failure", err)
+	}
+}
+
 func newTestAlerter(t *testing.T, name string, cidrs ...string) *BlockedRangeAlerter {
 	t.Helper()
 	alerter, err := NewBlockedRangeAlerter(AppConfig{
-		Mattermost: MattermostConfig{PrimaryURL: "https://matter.example/hook"},
+		NotificationURLs: []string{"logger://"},
 		AlertRanges: []AlertRangeConfig{{
 			Name:  name,
 			CIDRs: cidrs,
