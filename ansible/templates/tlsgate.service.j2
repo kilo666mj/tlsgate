@@ -14,7 +14,7 @@ ExecStart=/usr/local/bin/tlsgate serve \
 {% endfor %}
   --db /var/lib/tlsgate/db.sqlite \
   --fingerprint {{ fingerprint | default('ja3') }} \
-  {% if allow_unknown | default(false) | bool %}--allow-unknown{% endif %}
+  {% if reset_fingerprints | default(false) | bool %}--reset-fingerprints {% endif %}{% if allow_unknown | default(false) | bool %}--allow-unknown{% endif %}
 
 Restart=on-failure
 RestartSec=5

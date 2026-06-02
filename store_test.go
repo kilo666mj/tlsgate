@@ -41,6 +41,55 @@ func TestStoreSetLabelAndDelete(t *testing.T) {
 	}
 }
 
+func TestReconcileFingerprintMethod(t *testing.T) {
+	store := newTestStore(t)
+
+	// Fresh store: adopts the method without purging.
+	if purged, err := store.ReconcileFingerprintMethod(MethodJA3, false); err != nil || purged != 0 {
+		t.Fatalf("first reconcile = (%d, %v), want (0, nil)", purged, err)
+	}
+
+	if _, err := store.Seen("fp1", "192.0.2.10", 993, TLSMetadata{}, false); err != nil {
+		t.Fatalf("Seen: %v", err)
+	}
+
+	// Same method: no-op, fingerprints retained.
+	if purged, err := store.ReconcileFingerprintMethod(MethodJA3, false); err != nil || purged != 0 {
+		t.Fatalf("same-method reconcile = (%d, %v), want (0, nil)", purged, err)
+	}
+
+	// Switching method without reset: refused, fingerprints retained.
+	if _, err := store.ReconcileFingerprintMethod(MethodJA4, false); err == nil {
+		t.Fatal("method switch without --reset-fingerprints: expected error, got nil")
+	}
+	entries, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, ok := entries["fp1"]; !ok {
+		t.Fatal("fp1 purged despite refused switch")
+	}
+
+	// Switching with reset: purges and records the new method.
+	purged, err := store.ReconcileFingerprintMethod(MethodJA4, true)
+	if err != nil {
+		t.Fatalf("reset reconcile: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1", purged)
+	}
+	entries, err = store.List()
+	if err != nil {
+		t.Fatalf("List after reset: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries after reset = %d, want 0", len(entries))
+	}
+	if method, err := store.GetMeta(metaFingerprintMethod); err != nil || method != string(MethodJA4) {
+		t.Fatalf("stored method = (%q, %v), want %q", method, err, MethodJA4)
+	}
+}
+
 func TestStoreMigratesLegacyJSON(t *testing.T) {
 	dir := t.TempDir()
 	legacy := `{"fingerprints":{"fpA":{` +

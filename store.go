@@ -93,6 +93,10 @@ func (s *Store) init() error {
 			first_seen TEXT NOT NULL,
 			PRIMARY KEY (range_name, ip)
 		)`,
+		`CREATE TABLE IF NOT EXISTS meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_fingerprints_last_seen ON fingerprints(last_seen)`,
 		`CREATE INDEX IF NOT EXISTS idx_fingerprint_ips_ip ON fingerprint_ips(ip)`,
 	} {
@@ -104,6 +108,73 @@ func (s *Store) init() error {
 		return err
 	}
 	return s.migrateLegacyJSON(ctx)
+}
+
+// metaFingerprintMethod is the meta key recording which fingerprint method
+// (ja3 or ja4) the stored fp keys were computed with. The fp primary key is
+// method-specific, so switching methods changes the keyspace and silently
+// invalidates every approval and block; this lets serve detect that.
+const metaFingerprintMethod = "fingerprint_method"
+
+func (s *Store) GetMeta(key string) (string, error) {
+	var value string
+	err := s.db.QueryRowContext(context.Background(),
+		`SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func (s *Store) SetMeta(key, value string) error {
+	_, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
+}
+
+// ResetFingerprints deletes every fingerprint, cascading to the dependent ip
+// and port rows. The blocked_range_alerts table is keyed by range+ip rather
+// than fp, so it is left intact. Returns the number of fingerprints removed.
+func (s *Store) ResetFingerprints() (int64, error) {
+	res, err := s.db.ExecContext(context.Background(), `DELETE FROM fingerprints`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ReconcileFingerprintMethod aligns the store's keyspace with method. A fresh
+// store (or one predating this metadata) simply records method. If the stored
+// method differs, the caller must opt into a purge via reset, since switching
+// ja3<->ja4 changes the fp keyspace and would otherwise silently orphan every
+// approval and block. Returns the number of fingerprints purged, if any.
+func (s *Store) ReconcileFingerprintMethod(method FingerprintMethod, reset bool) (int64, error) {
+	stored, err := s.GetMeta(metaFingerprintMethod)
+	if err != nil {
+		return 0, err
+	}
+	if stored == string(method) {
+		return 0, nil
+	}
+	var purged int64
+	if stored != "" {
+		if !reset {
+			return 0, fmt.Errorf("database was built with fingerprint method %q but %q was requested; "+
+				"re-run with --reset-fingerprints to purge stored fingerprints, or switch back to %q",
+				stored, method, stored)
+		}
+		if purged, err = s.ResetFingerprints(); err != nil {
+			return 0, err
+		}
+	}
+	if err := s.SetMeta(metaFingerprintMethod, string(method)); err != nil {
+		return purged, err
+	}
+	return purged, nil
 }
 
 // addColumnIfMissing adds a column to an existing table, tolerating older

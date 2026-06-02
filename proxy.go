@@ -58,6 +58,7 @@ func cmdServe(args []string) {
 	configPath := fs.String("config", defaultConfig, "JSON config path for alerting")
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
+	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when --fingerprint differs from the database's method")
 	fs.Parse(args)
 
 	if len(routes) == 0 {
@@ -78,6 +79,15 @@ func cmdServe(args []string) {
 	store, err := NewStore(*dbPath)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
+	}
+
+	// The fp keyspace is method-specific, so guard against an accidental
+	// ja3<->ja4 switch silently orphaning every approval and block. Purging
+	// is opt-in via --reset-fingerprints.
+	if purged, err := store.ReconcileFingerprintMethod(method, *resetFingerprints); err != nil {
+		log.Fatalf("%v", err)
+	} else if purged > 0 {
+		log.Printf("reset %d fingerprint(s) switching to method %s", purged, method)
 	}
 
 	cfg, err := loadConfig(*configPath)

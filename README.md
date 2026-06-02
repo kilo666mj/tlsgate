@@ -24,8 +24,12 @@ the mail submission/retrieval ports; examples below use that setup.
 
 `--fingerprint ja3` (default) or `--fingerprint ja4` selects which fingerprint
 is the allow/block key. Both are always computed and recorded; only the key
-used for decisions changes. The store key changes with the method, so switching
-restarts approvals from empty — re-approve your clients after a switch.
+used for decisions changes. The store key changes with the method, so the
+database records which method built it: starting `serve` with a different
+`--fingerprint` than the stored one **refuses to start** rather than silently
+orphaning every approval and block. Pass `--reset-fingerprints` to purge the
+stored fingerprints and rebuild under the new method (you re-approve clients
+afterward).
 
 - **JA3** — MD5 over TLS version, cipher list, extension list, curves, and EC
   point formats. Order-sensitive: a client that shuffles its TLS extension order
@@ -75,7 +79,9 @@ To temporarily allow unknown fingerprints (e.g. during initial setup), set
 `allow_unknown=true` in `ansible/inventory` and re-run.
 
 To use JA4 instead of JA3, set `fingerprint=ja4` in `ansible/inventory` (default
-`ja3`). Switching the method resets the approval set, so re-approve clients after.
+`ja3`). Switching the method on an existing database refuses to start until you
+also pass `--reset-fingerprints` (purges stored fingerprints); re-approve
+clients after.
 
 ## Docker
 
@@ -201,9 +207,9 @@ service.
 `serve` reads optional alert configuration from
 `/var/lib/tlsgate/config.json`, or another path passed with
 `--config <path>`. If `alert_ranges` are configured, a blocked connection from
-a matching CIDR sends a Mattermost alert the first time each source IP is seen
-for that range. Alerts are deduplicated in SQLite, so repeated blocked attempts
-from the same IP/range do not spam the channel.
+a matching CIDR sends a Shoutrrr notification the first time each source IP is
+seen for that range. Alerts are deduplicated in SQLite, so repeated blocked
+attempts from the same IP/range do not spam the channel.
 
 Ansible deploys this config when `alert_ranges` is defined. Prefer the
 router-advertised IPv6 delegated prefix over the narrower `/64` shown on a
@@ -214,11 +220,10 @@ For Ansible-managed alert config, create a local ignored file at
 
 ```yaml
 ---
-mattermost_primary_url: "https://matter.example/hooks/primary"
-mattermost_secondary_url: ""
-mattermost_channel: "#logw"
-mattermost_username: "tlsgate"
-mattermost_icon_url: ""
+notification_urls:
+  - "mattermost://tlsgate@matter.example/primary/logw"
+  - "mattermost://tlsgate@matter2.example/secondary/logw"
+notification_mode: failover
 
 # Cap stored fingerprints (0 = unlimited). Approved entries are never evicted.
 max_fingerprints: 100000
@@ -230,22 +235,31 @@ alert_ranges:
       - "2001:db8:1234:5600::/59"
 ```
 
-Do not commit this file; it may contain Mattermost webhook secrets and private
-network ranges.
+Do not commit this file; it may contain notification service secrets and
+private network ranges.
 
-Webhook URLs (`primary_url`, `secondary_url`) must be `https://`; tlsgate
-refuses to start otherwise, so alert content and webhook tokens are never sent
-in cleartext.
+`notification_urls` are Shoutrrr service URLs, so the same alert path can send
+to Mattermost, Slack, Discord, Gotify, Matrix, Teams, Telegram, generic
+webhooks, email, and other supported services. tlsgate refuses to start if a
+notification URL would deliver over cleartext (an `+http` scheme or a
+`disabletls` override), so alert content and webhook tokens are never sent in
+the clear.
+
+`notification_mode` defaults to `failover`, which tries URLs in order and stops
+after the first successful delivery. Set it to `broadcast` to send every alert
+to every URL and treat any failed destination as a failed delivery.
+
+Older `mattermost_*` Ansible variables and JSON `mattermost` config are still
+accepted as a compatibility fallback, but new config should use
+`notification_urls`.
 
 ```json
 {
-  "mattermost": {
-    "primary_url": "https://matter.example/hooks/primary",
-    "secondary_url": "https://matter2.example/hooks/secondary",
-    "channel": "#logw",
-    "username": "tlsgate",
-    "icon_url": "https://example.com/icon.png"
-  },
+  "notification_urls": [
+    "mattermost://tlsgate@matter.example/primary/logw",
+    "mattermost://tlsgate@matter2.example/secondary/logw"
+  ],
+  "notification_mode": "failover",
   "max_fingerprints": 100000,
   "alert_ranges": [
     {
