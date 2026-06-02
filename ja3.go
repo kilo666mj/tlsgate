@@ -259,20 +259,30 @@ func u8str(vals []uint8) string {
 	return strings.Join(parts, "-")
 }
 
+// ja3FromHello builds the JA3 string and its md5 fingerprint from a parsed
+// ClientHello. Per the canonical JA3 spec (Salesforce), GREASE values are NOT
+// stripped — they are part of the fingerprinted byte sequence — so these
+// hashes match external JA3 databases and threat feeds. (JA4, by contrast,
+// deliberately strips GREASE; see computeJA4.)
+func ja3FromHello(ch *clientHello) (fp string, ja3str string) {
+	ja3str = strings.Join([]string{
+		strconv.Itoa(int(ch.version)),
+		u16str(ch.cipherSuites, false),
+		u16str(ch.extensions, false),
+		u16str(ch.ellipticCurves, false),
+		u8str(ch.ecPointFormats),
+	}, ",")
+	sum := md5.Sum([]byte(ja3str))
+	return hex.EncodeToString(sum[:]), ja3str
+}
+
 func computeJA3(data []byte) (fp string, ja3str string, err error) {
 	ch, err := parseClientHello(data)
 	if err != nil {
 		return "", "", err
 	}
-	ja3str = strings.Join([]string{
-		strconv.Itoa(int(ch.version)),
-		u16str(ch.cipherSuites, true),
-		u16str(ch.extensions, true),
-		u16str(ch.ellipticCurves, true),
-		u8str(ch.ecPointFormats),
-	}, ",")
-	sum := md5.Sum([]byte(ja3str))
-	return hex.EncodeToString(sum[:]), ja3str, nil
+	fp, ja3str = ja3FromHello(ch)
+	return fp, ja3str, nil
 }
 
 // extractTLSMetadata parses a ClientHello and computes both fingerprints. It
@@ -283,13 +293,8 @@ func extractTLSMetadata(data []byte, method FingerprintMethod) (fp string, meta 
 	if err != nil {
 		return "", TLSMetadata{}, err
 	}
-	meta.JA3 = strings.Join([]string{
-		strconv.Itoa(int(ch.version)),
-		u16str(ch.cipherSuites, true),
-		u16str(ch.extensions, true),
-		u16str(ch.ellipticCurves, true),
-		u8str(ch.ecPointFormats),
-	}, ",")
+	ja3fp, ja3str := ja3FromHello(ch)
+	meta.JA3 = ja3str
 	meta.JA4 = computeJA4(ch)
 	meta.SNI = ch.serverName
 	meta.ALPN = ch.alpnProtocols
@@ -299,6 +304,5 @@ func extractTLSMetadata(data []byte, method FingerprintMethod) (fp string, meta 
 	if method == MethodJA4 {
 		return meta.JA4, meta, nil
 	}
-	sum := md5.Sum([]byte(meta.JA3))
-	return hex.EncodeToString(sum[:]), meta, nil
+	return ja3fp, meta, nil
 }

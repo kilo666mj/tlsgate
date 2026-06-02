@@ -162,11 +162,45 @@ func correlateSyslog(path string, entry Entry, window time.Duration, limit int) 
 
 func lineContainsAnyIP(line string, ips map[string]struct{}) (string, bool) {
 	for ip := range ips {
-		if strings.Contains(line, ip) {
+		if lineHasIPToken(line, ip) {
 			return ip, true
 		}
 	}
 	return "", false
+}
+
+// lineHasIPToken reports whether ip appears in line as a whole address rather
+// than a substring of a longer one. A bare strings.Contains would match
+// "10.0.0.1" inside "10.0.0.10" or "210.0.0.1"; requiring the neighbouring
+// characters to not be part of an IP literal (hex digit, dot, or colon) avoids
+// those false correlations for both IPv4 and IPv6 forms.
+func lineHasIPToken(line, ip string) bool {
+	for from := 0; ; {
+		i := strings.Index(line[from:], ip)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(ip)
+		if !ipBoundaryByte(line, start-1) && !ipBoundaryByte(line, end) {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+// ipBoundaryByte reports whether the byte at index i is part of an IP literal,
+// so a match touching it is a substring of a larger address. Out-of-range
+// indices (line edges) count as clean boundaries.
+func ipBoundaryByte(line string, i int) bool {
+	if i < 0 || i >= len(line) {
+		return false
+	}
+	c := line[i]
+	return c == '.' || c == ':' ||
+		(c >= '0' && c <= '9') ||
+		(c >= 'a' && c <= 'f') ||
+		(c >= 'A' && c <= 'F')
 }
 
 func withinCorrelationWindows(t time.Time, entry Entry, window time.Duration) bool {
