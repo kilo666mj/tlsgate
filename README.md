@@ -24,8 +24,12 @@ the mail submission/retrieval ports; examples below use that setup.
 
 `--fingerprint ja3` (default) or `--fingerprint ja4` selects which fingerprint
 is the allow/block key. Both are always computed and recorded; only the key
-used for decisions changes. The store key changes with the method, so switching
-restarts approvals from empty — re-approve your clients after a switch.
+used for decisions changes. The store key changes with the method, so the
+database records which method built it: starting `serve` with a different
+`--fingerprint` than the stored one **refuses to start** rather than silently
+orphaning every approval and block. Pass `--reset-fingerprints` to purge the
+stored fingerprints and rebuild under the new method (you re-approve clients
+afterward).
 
 - **JA3** — MD5 over TLS version, cipher list, extension list, curves, and EC
   point formats. Order-sensitive: a client that shuffles its TLS extension order
@@ -75,7 +79,9 @@ To temporarily allow unknown fingerprints (e.g. during initial setup), set
 `allow_unknown=true` in `ansible/inventory` and re-run.
 
 To use JA4 instead of JA3, set `fingerprint=ja4` in `ansible/inventory` (default
-`ja3`). Switching the method resets the approval set, so re-approve clients after.
+`ja3`). Switching the method on an existing database refuses to start until you
+also pass `--reset-fingerprints` (purges stored fingerprints); re-approve
+clients after.
 
 ## Docker
 
