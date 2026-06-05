@@ -370,16 +370,18 @@ func readClientHello(conn net.Conn, firstHeader []byte) (parseBuf, raw []byte, e
 		raw = append(raw, body...)
 		bodies = append(bodies, body...)
 
-		// Need the 4-byte handshake header before the declared length is known.
-		if len(bodies) < 4 {
-			return nil, raw, fmt.Errorf("ClientHello shorter than handshake header (%d bytes)", len(bodies))
-		}
-		total := 4 + (int(bodies[1])<<16 | int(bodies[2])<<8 | int(bodies[3]))
-		if total > maxClientHello {
-			return nil, raw, fmt.Errorf("ClientHello message too large: %d bytes", total)
-		}
-		if len(bodies) >= total {
-			break // full handshake message assembled
+		// The 4-byte handshake header carries the declared message length. The
+		// RFC permits fragmenting at any byte boundary, so the first record may
+		// hold fewer than 4 bytes; keep reading records until the header lands
+		// rather than rejecting the connection.
+		if len(bodies) >= 4 {
+			total := 4 + (int(bodies[1])<<16 | int(bodies[2])<<8 | int(bodies[3]))
+			if total > maxClientHello {
+				return nil, raw, fmt.Errorf("ClientHello message too large: %d bytes", total)
+			}
+			if len(bodies) >= total {
+				break // full handshake message assembled
+			}
 		}
 
 		// Message continues in another record.
