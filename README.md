@@ -235,6 +235,11 @@ notification_mode: failover
 # Cap stored fingerprints (0 = unlimited). Approved entries are never evicted.
 max_fingerprints: 100000
 
+# Source CIDRs that bypass the fingerprint gate (always forwarded, never
+# auto-approve a fingerprint). Keep tight.
+approve_ranges:
+  - "198.51.100.0/24"
+
 alert_ranges:
   - name: home
     cidrs:
@@ -264,6 +269,7 @@ to every URL and treat any failed destination as a failed delivery.
   ],
   "notification_mode": "failover",
   "max_fingerprints": 100000,
+  "approve_ranges": ["198.51.100.0/24", "2001:db8:1234:5600::/59"],
   "alert_ranges": [
     {
       "name": "home",
@@ -271,6 +277,40 @@ to every URL and treat any failed destination as a failed delivery.
     }
   ]
 }
+```
+
+## Trusted source ranges (`approve_ranges`)
+
+`approve_ranges` lists CIDRs whose **source IP** bypasses the fingerprint gate:
+connections from those addresses are always forwarded, even if the client
+presents an unknown, pending, or blocked fingerprint.
+
+Trust is **per-connection and IP-scoped only**. A whitelisted connection never
+marks its fingerprint approved, so the *same* fingerprint arriving from a
+non-whitelisted IP is still gated normally — an attacker who clones a trusted
+client's JA3/JA4 gains nothing unless they also source from inside the range.
+New fingerprints from whitelisted IPs are still recorded as `pending` (not
+`blocked`) so you keep visibility into what trusted hosts present; they appear
+in `tlsgate list` for review. Whitelisted connections log with a `WHITELIST`
+tag.
+
+This is the safe posture. It deliberately does **not** auto-approve
+fingerprints, because the store is keyed by fingerprint, not IP — approving a
+fingerprint would extend trust to every IP that can replay it. Use
+`approve_ranges` for a trusted management subnet or a known-good origin; keep
+the ranges as tight as possible. Removing a CIDR revokes its bypass
+immediately, with no residual approvals left behind.
+
+```json
+{
+  "approve_ranges": ["198.51.100.0/24", "2001:db8:1234:5600::/59"]
+}
+```
+
+```yaml
+approve_ranges:
+  - "198.51.100.0/24"
+  - "2001:db8:1234:5600::/59"
 ```
 
 ## Limiting store growth

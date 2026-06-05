@@ -35,6 +35,60 @@ func TestLoadConfigAndAlertRangeParsing(t *testing.T) {
 	}
 }
 
+func TestIPAllowlistContains(t *testing.T) {
+	allow, err := newIPAllowlist([]string{"192.0.2.0/24", "2001:db8::/32"})
+	if err != nil {
+		t.Fatalf("newIPAllowlist: %v", err)
+	}
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"192.0.2.7", true},
+		{"2001:db8::1", true},
+		{"198.51.100.1", false},
+		{"203.0.113.9", false},
+		{"not-an-ip", false},
+	}
+	for _, c := range cases {
+		if got := allow.contains(c.ip); got != c.want {
+			t.Errorf("contains(%q) = %v, want %v", c.ip, got, c.want)
+		}
+	}
+}
+
+func TestIPAllowlistEmptyMatchesNothing(t *testing.T) {
+	var allow ipAllowlist
+	if allow.contains("192.0.2.7") {
+		t.Fatal("empty allowlist matched an IP")
+	}
+}
+
+func TestNewIPAllowlistRejectsBadCIDR(t *testing.T) {
+	if _, err := newIPAllowlist([]string{"192.0.2.0/24", "garbage"}); err == nil {
+		t.Fatal("newIPAllowlist accepted a malformed CIDR, want error")
+	}
+}
+
+func TestLoadConfigParsesApproveRanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := `{"approve_ranges": ["10.0.0.0/8", "192.0.2.0/24"]}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	allow, err := newIPAllowlist(cfg.ApproveRanges)
+	if err != nil {
+		t.Fatalf("newIPAllowlist: %v", err)
+	}
+	if !allow.contains("10.1.2.3") || allow.contains("172.16.0.1") {
+		t.Fatalf("approve_ranges not honored: %+v", cfg.ApproveRanges)
+	}
+}
+
 func TestLoadConfigRejectsCleartextNotificationURLs(t *testing.T) {
 	for _, rawURL := range []string{
 		"generic+http://siem.internal/hook",

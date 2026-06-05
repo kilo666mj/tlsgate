@@ -45,7 +45,7 @@
         mode: '0600'
         owner: tlsgate
         group: tlsgate
-      when: alert_ranges is defined
+      when: alert_ranges is defined or approve_ranges is defined
       notify: Restart tlsgate
 
     - name: Copy binary

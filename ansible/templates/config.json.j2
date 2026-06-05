@@ -2,5 +2,6 @@
   "notification_urls": {{ notification_urls | default([]) | to_nice_json }},
   "notification_mode": {{ notification_mode | default('failover') | to_json }},
   "max_fingerprints": {{ max_fingerprints | default(0) | int }},
+  "approve_ranges": {{ approve_ranges | default([]) | to_nice_json }},
   "alert_ranges": {{ alert_ranges | default([]) | to_nice_json }}
 }
