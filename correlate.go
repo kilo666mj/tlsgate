@@ -63,7 +63,7 @@ func cmdCorrelate(args []string) {
 		fatalf("correlate syslog: %v", err)
 	}
 
-	fmt.Printf("fingerprint: %s\n", fp)
+	fmt.Printf("fingerprint: %s\n", displayValue(fp))
 	if entry.Label != "" {
 		fmt.Printf("label: %s\n", displayValue(entry.Label))
 	}

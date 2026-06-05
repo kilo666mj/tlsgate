@@ -29,6 +29,8 @@ func TestSanitizeLog(t *testing.T) {
 		{"crlf", "a\r\nb", "ab"},
 		{"tab", "a\tb", "ab"},
 		{"del", "a\x7fb", "ab"},
+		{"c1 csi", "a\u009bb", "ab"},
+		{"c1 nel", "a\u0085b", "ab"},
 		{"escape", "\x1b[31mred\x1b[0m", "[31mred[0m"},
 		{"empty", "", ""},
 		{"unicode kept", "café→x", "café→x"},

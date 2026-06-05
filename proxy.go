@@ -67,6 +67,14 @@ func cmdServe(args []string) {
 
 	log.Printf("tlsgate %s starting", version)
 
+	// tlsgate needs no root privilege: binding low ports should be granted
+	// narrowly via CAP_NET_BIND_SERVICE (systemd AmbientCapabilities or the
+	// container's cap_add), not by running as root. Warn if we are uid 0 so
+	// a misconfigured deployment is visible rather than silently overprivileged.
+	if os.Geteuid() == 0 {
+		log.Printf("WARNING: running as root; grant CAP_NET_BIND_SERVICE and run as an unprivileged user instead")
+	}
+
 	method, err := ParseFingerprintMethod(*fingerprint)
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -387,7 +395,10 @@ func readClientHello(conn net.Conn, firstHeader []byte) (parseBuf, raw []byte, e
 
 func sanitizeLog(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		// Strip C0 controls, DEL, and the C1 range (0x80-0x9f): the latter
+		// includes CSI (0x9b), which some terminals act on like ESC '[',
+		// so a raw C1 byte could still drive an escape sequence.
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
 		}
 		return r
