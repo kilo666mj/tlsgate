@@ -28,11 +28,10 @@ services:
     # proxy does not need. It only binds the privileged listen ports and writes
     # to its data volume.
     #
-    # NOTE: with cap_drop ALL the root process loses CAP_DAC_OVERRIDE, so it must
-    # actually own its data. A named volume (as below) is created root-owned and
-    # correctly SELinux-labeled, so it works out of the box. If you switch to a
-    # host bind mount, chown it to uid 0 AND add :Z to the mount (e.g.
-    # ./data:/var/lib/tlsgate:Z) so SELinux relabels it.
+    # NET_BIND_SERVICE is still required if the image runs as non-root, because
+    # the routes bind ports below 1024. The data directory must be writable by
+    # the container UID; for a host bind mount, chown it to that UID and add :Z
+    # on SELinux hosts (e.g. ./data:/var/lib/tlsgate:Z).
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: ["ALL"]

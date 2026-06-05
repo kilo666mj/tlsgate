@@ -106,24 +106,24 @@ func cmdList(args []string) {
 		}
 		if *verbose {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				k, e.Status, label, e.Count,
+				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
-				valueOrDash(e.TLS.SNI),
-				valueOrDash(strings.Join(e.TLS.ALPN, ",")),
-				valueOrDash(tlsVersionList(e.TLS.SupportedVersions)),
-				valueOrDash(signatureAlgorithmList(e.TLS.SignatureAlgorithms)),
-				valueOrDash(e.TLS.JA3),
-				valueOrDash(e.TLS.JA4),
-				ips,
+				displayValue(e.TLS.SNI),
+				displayValue(strings.Join(e.TLS.ALPN, ",")),
+				displayValue(tlsVersionList(e.TLS.SupportedVersions)),
+				displayValue(signatureAlgorithmList(e.TLS.SignatureAlgorithms)),
+				displayValue(e.TLS.JA3),
+				displayValue(e.TLS.JA4),
+				displayValue(ips),
 			)
 		} else {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
-				k, e.Status, label, e.Count,
+				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
-				valueOrDash(e.TLS.SNI),
-				valueOrDash(strings.Join(e.TLS.ALPN, ",")),
-				valueOrDash(tlsVersionList(e.TLS.SupportedVersions)),
-				ips,
+				displayValue(e.TLS.SNI),
+				displayValue(strings.Join(e.TLS.ALPN, ",")),
+				displayValue(tlsVersionList(e.TLS.SupportedVersions)),
+				displayValue(ips),
 			)
 		}
 	}
@@ -161,6 +161,10 @@ func valueOrDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func displayValue(s string) string {
+	return valueOrDash(sanitizeLog(s))
 }
 
 func tlsVersionList(vals []uint16) string {

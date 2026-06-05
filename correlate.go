@@ -65,7 +65,7 @@ func cmdCorrelate(args []string) {
 
 	fmt.Printf("fingerprint: %s\n", fp)
 	if entry.Label != "" {
-		fmt.Printf("label: %s\n", entry.Label)
+		fmt.Printf("label: %s\n", displayValue(entry.Label))
 	}
 	fmt.Printf("window: +/- %s around first_seen=%s and last_seen=%s\n",
 		window.String(),

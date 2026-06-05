@@ -1,9 +1,11 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,6 +24,29 @@ func muteStdout(t *testing.T) {
 		os.Stdout = orig
 		devnull.Close()
 	})
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdout pipe writer: %v", err)
+	}
+	os.Stdout = orig
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close stdout pipe reader: %v", err)
+	}
+	return string(out)
 }
 
 func TestCLIMutators(t *testing.T) {
@@ -227,5 +252,46 @@ func TestValueOrDash(t *testing.T) {
 	}
 	if got := valueOrDash("imap"); got != "imap" {
 		t.Fatalf("valueOrDash(\"imap\") = %q, want imap", got)
+	}
+}
+
+func TestDisplayValueSanitizesControlCharacters(t *testing.T) {
+	if got := displayValue("mail\x1b[31m.example\n.com"); got != "mail[31m.example.com" {
+		t.Fatalf("displayValue sanitized = %q", got)
+	}
+	if got := displayValue("\n\t"); got != "-" {
+		t.Fatalf("displayValue controls-only = %q, want -", got)
+	}
+}
+
+func TestCmdListSanitizesStoredMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db.sqlite")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	meta := TLSMetadata{
+		JA3:  "771,4865,0,0,0",
+		JA4:  "t13d0506\x1b2_aaaaaaaaaaaa_bbbbbbbbbbbb",
+		SNI:  "mail\x1b[31m.example\n.com",
+		ALPN: []string{"imap\x1b[2J"},
+	}
+	if _, err := store.Seen("fp\x1b[0m", "192.0.2.10", 993, meta, false); err != nil {
+		t.Fatalf("Seen: %v", err)
+	}
+	if err := store.SetLabel("fp\x1b[0m", "label\x1b[31m"); err != nil {
+		t.Fatalf("SetLabel: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cmdList([]string{"--db", path, "-v"})
+	})
+	if strings.ContainsAny(out, "\x1b\r\t") {
+		t.Fatalf("cmdList output contains control characters: %q", out)
+	}
+	for _, want := range []string{"fp[0m", "label[31m", "mail[31m.example.com", "imap[2J", "t13d05062_aaaaaaaaaaaa_bbbbbbbbbbbb"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("cmdList output %q missing sanitized value %q", out, want)
+		}
 	}
 }
