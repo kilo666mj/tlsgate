@@ -12,11 +12,13 @@ import (
 	"time"
 )
 
-// truncatedClientHello is a TLS handshake record (type 0x16, handshake
-// type 0x01) whose body is too short to be a valid ClientHello, so
-// extractTLSMetadata returns an error. It models a fragmented/truncated
-// ClientHello an attacker could send to probe the parse path.
-var truncatedClientHello = []byte{0x16, 0x03, 0x01, 0x00, 0x02, 0x01, 0x00}
+// truncatedClientHello is a complete TLS handshake record (type 0x16)
+// carrying a ClientHello (handshake type 0x01) whose declared length is 0,
+// so the message reassembles fully but extractTLSMetadata rejects it as
+// malformed. It models a parseable-shaped but invalid ClientHello an
+// attacker could send to probe the parse path. (A genuinely fragmented
+// header is now reassembled rather than rejected, see readClientHello.)
+var truncatedClientHello = []byte{0x16, 0x03, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00}
 
 func TestSanitizeLog(t *testing.T) {
 	cases := []struct {
@@ -244,6 +246,59 @@ func TestBlockedRangeMessageContainsNoBacktickBreakout(t *testing.T) {
 	msg := blockedRangeMessage("home", "198.51.100.1", 993, "fp", meta)
 	if strings.Contains(msg, "`@channel`") {
 		t.Fatalf("message leaked a backtick breakout: %q", msg)
+	}
+}
+
+// fragmentHandshake re-frames a captured ClientHello (5-byte record header +
+// handshake body) into multiple TLS records, splitting the body at the given
+// boundaries. It is used to model RFC-permitted fragmentation at any byte
+// offset, including a first record carrying fewer than 4 handshake bytes.
+func fragmentHandshake(hello []byte, splits ...int) []byte {
+	body := hello[5:]
+	var out []byte
+	prev := 0
+	emit := func(frag []byte) {
+		out = append(out, 0x16, 0x03, 0x01, byte(len(frag)>>8), byte(len(frag)))
+		out = append(out, frag...)
+	}
+	for _, s := range splits {
+		emit(body[prev:s])
+		prev = s
+	}
+	emit(body[prev:])
+	return out
+}
+
+// TestReadClientHelloReassemblesTinyFirstFragment proves the reassembly path
+// accepts a ClientHello whose first record holds only 2 handshake bytes, fewer
+// than the 4-byte handshake header. Such fragmentation is RFC-legal and was
+// previously rejected as unparseable.
+func TestReadClientHelloReassemblesTinyFirstFragment(t *testing.T) {
+	hello := captureClientHello(t)
+	fragmented := fragmentHandshake(hello, 2) // first record: 2 handshake bytes
+
+	server, client := net.Pipe()
+	defer server.Close()
+	go func() {
+		client.Write(fragmented)
+		client.Close()
+	}()
+	if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(server, header); err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	parseBuf, raw, err := readClientHello(server, header)
+	if err != nil {
+		t.Fatalf("readClientHello: %v", err)
+	}
+	if !bytes.Equal(raw, fragmented) {
+		t.Fatalf("raw = %x, want forwarded bytes verbatim %x", raw, fragmented)
+	}
+	if _, _, err := extractTLSMetadata(parseBuf, MethodJA3); err != nil {
+		t.Fatalf("extractTLSMetadata on reassembled hello: %v", err)
 	}
 }
 
