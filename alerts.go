@@ -38,6 +38,47 @@ type AppConfig struct {
 	// non-approved (pending/blocked) entries are pruned first.
 	MaxFingerprints int                `json:"max_fingerprints"`
 	AlertRanges     []AlertRangeConfig `json:"alert_ranges"`
+	// ApproveRanges lists CIDRs whose source IPs bypass the fingerprint
+	// gate: their connections are always forwarded. Trust stays IP-scoped
+	// and per-connection — a whitelisted hit never marks a fingerprint
+	// approved, so the same fp from a non-whitelisted IP is still gated.
+	// New fingerprints from whitelisted IPs are still recorded as pending
+	// for visibility.
+	ApproveRanges []string `json:"approve_ranges"`
+}
+
+// ipAllowlist holds the parsed ApproveRanges CIDRs and answers whether a
+// source IP falls inside any of them.
+type ipAllowlist struct {
+	prefixes []netip.Prefix
+}
+
+func newIPAllowlist(cidrs []string) (ipAllowlist, error) {
+	var a ipAllowlist
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return ipAllowlist{}, fmt.Errorf("parse approve_ranges CIDR %q: %w", cidr, err)
+		}
+		a.prefixes = append(a.prefixes, prefix)
+	}
+	return a, nil
+}
+
+func (a ipAllowlist) contains(ip string) bool {
+	if len(a.prefixes) == 0 {
+		return false
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range a.prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 type AlertRangeConfig struct {

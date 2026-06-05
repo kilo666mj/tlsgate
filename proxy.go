@@ -99,6 +99,14 @@ func cmdServe(args []string) {
 		log.Fatalf("load alert ranges: %v", err)
 	}
 
+	allow, err := newIPAllowlist(cfg.ApproveRanges)
+	if err != nil {
+		log.Fatalf("load approve ranges: %v", err)
+	}
+	if len(cfg.ApproveRanges) > 0 {
+		log.Printf("approve ranges (fingerprint gate bypassed): %s", strings.Join(cfg.ApproveRanges, ", "))
+	}
+
 	// Bound store growth from unauthenticated unknown clients: trim back to
 	// the configured cap at startup and on a timer. Approved entries are
 	// never evicted (see Store.PruneToLimit).
@@ -136,9 +144,9 @@ func cmdServe(args []string) {
 	// the main goroutine so the process stays up.
 	for i, rt := range routes {
 		if i == len(routes)-1 {
-			listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem)
+			listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem, allow)
 		} else {
-			go listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem)
+			go listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem, allow)
 		}
 	}
 }
@@ -175,7 +183,7 @@ func (r *routeFlag) Set(v string) error {
 	return nil
 }
 
-func listenAndProxy(listen, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter, sem *semaphore) {
+func listenAndProxy(listen, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter, sem *semaphore, allow ipAllowlist) {
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		log.Fatalf("listen %s: %v", listen, err)
@@ -197,15 +205,22 @@ func listenAndProxy(listen, backend string, port int, store *Store, blockUnknown
 		}
 		go func() {
 			defer sem.release()
-			handleConn(conn, backend, port, store, blockUnknown, method, alerter, limiter)
+			handleConn(conn, backend, port, store, blockUnknown, method, alerter, limiter, allow)
 		}()
 	}
 }
 
-func handleConn(client net.Conn, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter) {
+func handleConn(client net.Conn, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter, allow ipAllowlist) {
 	defer client.Close()
 
 	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
+
+	// Whitelisted source IPs bypass the gate: every block decision below
+	// becomes non-blocking and the connection is forwarded. Trust is
+	// per-connection and IP-scoped only — we never mark the fingerprint
+	// approved, so the same fp from a non-whitelisted IP stays gated.
+	whitelisted := allow.contains(clientIP)
+	blockThis := blockUnknown && !whitelisted
 
 	// Drop floods before any read or DB write so a single IP cannot pin
 	// goroutines or grow the fingerprint store with randomized handshakes.
@@ -231,37 +246,47 @@ func handleConn(client net.Conn, backend string, port int, store *Store, blockUn
 		peeked = raw
 		if rerr != nil {
 			log.Printf("[%s:%d] ClientHello error: %v", clientIP, port, rerr)
-			if blockUnknown {
+			if blockThis {
 				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
 				return
 			}
-			// allow-unknown: fall through and forward what we read.
+			// allow-unknown or whitelisted: fall through and forward what we read.
 		} else if fp, meta, perr := extractTLSMetadata(parseBuf, method); perr != nil {
 			log.Printf("[%s:%d] parse error: %v", clientIP, port, perr)
-			if blockUnknown {
+			if blockThis {
 				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
 				return
 			}
 		} else {
-			status, err := store.Seen(fp, clientIP, port, meta, blockUnknown)
+			// Record new whitelisted fingerprints as pending (not blocked)
+			// for visibility, without ever approving them.
+			status, err := store.Seen(fp, clientIP, port, meta, blockThis)
 			if err != nil {
 				log.Printf("[%s:%d] store error: %v; failing closed", clientIP, port, err)
 				return
 			}
 			switch status {
 			case StatusBlocked:
+				if whitelisted {
+					log.Printf("[%s:%d] WHITELIST forwarding blocked fp=%s", clientIP, port, fp)
+					break
+				}
 				log.Printf("[%s:%d] BLOCKED  fp=%s", clientIP, port, fp)
 				alerter.AlertBlocked(store, clientIP, port, fp, meta)
 				return
 			case StatusPending:
-				log.Printf("[%s:%d] PENDING  fp=%s sni=%q alpn=%q ja3=%s ja4=%s", clientIP, port, fp, sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4)
+				tag := "PENDING "
+				if whitelisted {
+					tag = "WHITELIST"
+				}
+				log.Printf("[%s:%d] %s fp=%s sni=%q alpn=%q ja3=%s ja4=%s", clientIP, port, tag, fp, sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4)
 			case StatusApproved:
 				log.Printf("[%s:%d] APPROVED fp=%s", clientIP, port, fp)
 			}
 		}
 	} else {
 		peeked = header
-		if blockUnknown {
+		if blockThis {
 			log.Printf("[%s:%d] BLOCKED  non-TLS connection", clientIP, port)
 			return
 		}
