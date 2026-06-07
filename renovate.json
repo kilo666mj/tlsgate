@@ -36,14 +36,13 @@
       "groupName": "Go module updates"
     },
     {
-      "description": "Require review for major Go module updates",
+      "description": "Keep major Go module updates separate",
       "matchManagers": [
         "gomod"
       ],
       "matchUpdateTypes": [
         "major"
-      ],
-      "dependencyDashboardApproval": true
+      ]
     },
     {
       "description": "Keep Go Docker base image updates separate",
