@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/containrrr/shoutrrr v0.8.0
-	modernc.org/sqlite v1.51.0
+	modernc.org/sqlite v1.52.0
 )
 
 require (
