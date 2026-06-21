@@ -10,6 +10,8 @@ allows/blocks connections based on an approval store. Routes are generic
 (`--route LISTEN=BACKEND`, repeatable); fronting a mail server on IMAP (993)
 and SMTPS (465) is the common case but not the only one.
 
+https://github.com/user-attachments/assets/16ee363c-249f-4c97-a35c-2d30159c9f01
+
 ## How it works
 
 Sits in front of one or more TLS backends, peeks at the ClientHello before
