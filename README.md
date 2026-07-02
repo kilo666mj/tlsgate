@@ -3,7 +3,7 @@
 <p align="center">
   <img src="docs/art/tlsgate-mark.png" alt="tlsgate mark" width="260">
   <br>
-  <img src="docs/art/porter-mascot.png" alt="Porter mascot for the gate tools" width="320">
+  <a href="https://github.com/kilo666mj/gatehub"><img src="docs/art/porter-mascot.png" alt="Porter mascot for the gate tools" width="320"></a>
 </p>
 
 > **Written with AI.** This project was developed with the help of an AI
