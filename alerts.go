@@ -44,7 +44,8 @@ type AppConfig struct {
 	// approved, so the same fp from a non-whitelisted IP is still gated.
 	// New fingerprints from whitelisted IPs are still recorded as pending
 	// for visibility.
-	ApproveRanges []string `json:"approve_ranges"`
+	ApproveRanges []string           `json:"approve_ranges"`
+	ControlPlane  ControlPlaneConfig `json:"control_plane"`
 }
 
 // ipAllowlist holds the parsed ApproveRanges CIDRs and answers whether a

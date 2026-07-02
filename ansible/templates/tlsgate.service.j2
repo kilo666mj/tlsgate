@@ -13,6 +13,7 @@ ExecStart=/usr/local/bin/tlsgate serve \
   --route {{ r.listen }}={{ r.backend }} \
 {% endfor %}
   --db /var/lib/tlsgate/db.sqlite \
+  --config {{ tlsgate_config | default('/etc/tlsgate/config.json') }} \
   --fingerprint {{ fingerprint | default('ja3') }} \
   {% if reset_fingerprints | default(false) | bool %}--reset-fingerprints {% endif %}{% if allow_unknown | default(false) | bool %}--allow-unknown{% endif %}
 

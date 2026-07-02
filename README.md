@@ -272,6 +272,14 @@ to every URL and treat any failed destination as a failed delivery.
   "notification_mode": "failover",
   "max_fingerprints": 100000,
   "approve_ranges": ["198.51.100.0/24", "2001:db8:1234:5600::/59"],
+  "control_plane": {
+    "url": "https://gatehub.example.com",
+    "instance_id": "mail-tls",
+    "client_cert": "/etc/gatehub/client.crt",
+    "client_key": "/etc/gatehub/client.key",
+    "ca": "/etc/gatehub/ca.crt",
+    "sync_interval": "30s"
+  },
   "alert_ranges": [
     {
       "name": "home",
@@ -280,6 +288,30 @@ to every URL and treat any failed destination as a failed delivery.
   ]
 }
 ```
+
+## Gatehub sync
+
+`tlsgate` can optionally sync observed fingerprints and pull approval decisions
+from `gatehub`. Configure `control_plane` in the JSON config used by `serve`:
+
+```json
+{
+  "control_plane": {
+    "url": "https://gatehub.example.com",
+    "instance_id": "mail-tls",
+    "client_cert": "/etc/gatehub/client.crt",
+    "client_key": "/etc/gatehub/client.key",
+    "ca": "/etc/gatehub/ca.crt",
+    "server_name": "gatehub.example.com",
+    "sync_interval": "30s"
+  }
+}
+```
+
+When `control_plane.url` is empty or omitted, sync is disabled and `tlsgate`
+behaves exactly as before. The sync client uses mTLS, periodically uploads the
+local SQLite fingerprint state, then applies returned decisions locally with
+the same store path used by `approve --register`.
 
 ## Trusted source ranges (`approve_ranges`)
 
