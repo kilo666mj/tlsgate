@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 170" width="240" height="170" role="img" aria-label="tlsgate service mark">
+  <title>tlsgate service mark</title>
+  <!-- screen / tile background (delete this rect for a transparent glyph) -->
+  <rect x="0" y="0" width="240" height="170" rx="18" fill="#0F3C39"/>
+
+  <g fill="none" stroke="#35C281" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <!-- gateway outline: left foot -> up left wall -> apex -> down right wall -> right foot -->
+    <!-- building spans y 40..130, vertical center 85 = tile center -->
+    <path d="M 68,130 L 88,130 L 88,72 L 120,40 L 152,72 L 152,130 L 172,130"/>
+
+    <!-- ring nodes at each end, on the 85 centerline -->
+    <circle cx="28" cy="85" r="8" stroke-width="8"/>
+    <circle cx="212" cy="85" r="8" stroke-width="8"/>
+  </g>
+
+  <!-- connector dots: uniform 16px grid, mirrored about center (x=120) -->
+  <g fill="#35C281">
+    <circle cx="44" cy="85" r="4.5"/>
+    <circle cx="60" cy="85" r="4.5"/>
+    <circle cx="76" cy="85" r="4.5"/>
+    <circle cx="196" cy="85" r="4.5"/>
+    <circle cx="180" cy="85" r="4.5"/>
+    <circle cx="164" cy="85" r="4.5"/>
+  </g>
+
+  <!-- two tapered columns (narrower at top) -->
+  <g fill="#EAF3EF">
+    <path d="M 104,70 L 112,70 L 115,126 L 101,126 Z"/>
+    <path d="M 128,70 L 136,70 L 139,126 L 125,126 Z"/>
+  </g>
+</svg>
