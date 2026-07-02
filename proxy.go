@@ -136,6 +136,7 @@ func cmdServe(args []string) {
 			}
 		}()
 	}
+	startControlPlaneSync(store, cfg.ControlPlane)
 
 	// One limiter shared across all listeners so a source IP's budget
 	// spans every route combined rather than doubling per port.

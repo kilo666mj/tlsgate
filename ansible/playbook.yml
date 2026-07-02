@@ -9,6 +9,8 @@
       aarch64: arm64
       armv7l: arm
     goarch: "{{ goarch_map[ansible_facts['architecture']] | default('amd64') }}"
+    tlsgate_config_dir: /etc/tlsgate
+    tlsgate_config: "{{ tlsgate_config_dir }}/config.json"
 
   tasks:
     - name: Build binary for linux/{{ goarch }}
@@ -38,14 +40,35 @@
         owner: tlsgate
         group: tlsgate
 
+    - name: Create config directory
+      file:
+        path: "{{ tlsgate_config_dir }}"
+        state: directory
+        mode: '0750'
+        owner: root
+        group: tlsgate
+
+    - name: Install gatehub server CA
+      copy:
+        src: "{{ control_plane_ca_src }}"
+        dest: "{{ control_plane.ca }}"
+        mode: '0640'
+        owner: root
+        group: tlsgate
+      when:
+        - control_plane is defined
+        - control_plane.ca is defined
+        - control_plane_ca_src is defined
+      notify: Restart tlsgate
+
     - name: Deploy alert config
       template:
         src: config.json.j2
-        dest: /var/lib/tlsgate/config.json
-        mode: '0600'
-        owner: tlsgate
+        dest: "{{ tlsgate_config }}"
+        mode: '0640'
+        owner: root
         group: tlsgate
-      when: alert_ranges is defined or approve_ranges is defined
+      when: alert_ranges is defined or approve_ranges is defined or control_plane is defined
       notify: Restart tlsgate
 
     - name: Copy binary

@@ -89,6 +89,38 @@ func TestLoadConfigParsesApproveRanges(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesControlPlane(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := `{
+		"control_plane": {
+			"url": "https://gatehub.example.com/base",
+			"instance_id": "mail-tls",
+			"client_cert": "/etc/gatehub/client.crt",
+			"client_key": "/etc/gatehub/client.key",
+			"ca": "/etc/gatehub/ca.crt",
+			"server_name": "gatehub.example.com",
+			"sync_interval": "45s"
+		}
+	}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.ControlPlane.InstanceID != "mail-tls" || cfg.ControlPlane.interval() != 45*time.Second {
+		t.Fatalf("control plane config = %+v", cfg.ControlPlane)
+	}
+	u, err := controlPlaneURL(cfg.ControlPlane.URL, "/v1/policy", cfg.ControlPlane.InstanceID, "cursor")
+	if err != nil {
+		t.Fatalf("controlPlaneURL: %v", err)
+	}
+	if want := "https://gatehub.example.com/base/v1/policy?instance_id=mail-tls&since=cursor"; u != want {
+		t.Fatalf("controlPlaneURL = %q, want %q", u, want)
+	}
+}
+
 func TestLoadConfigRejectsCleartextNotificationURLs(t *testing.T) {
 	for _, rawURL := range []string{
 		"generic+http://siem.internal/hook",
