@@ -1,9 +1,7 @@
 # tlsgate
 
 <p align="center">
-  <img src="docs/art/tlsgate-mark.png" alt="tlsgate mark" width="150">
-  <br>
-  <img src="docs/art/porter-mascot.png" alt="Porter mascot for the gate tools" width="220">
+  <img src="docs/art/tlsgate-mark.png" alt="tlsgate mark" width="260">
 </p>
 
 > **Written with AI.** This project was developed with the help of an AI
