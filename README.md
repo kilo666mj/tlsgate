@@ -1,5 +1,9 @@
 # tlsgate
 
+<p align="center">
+  <img src="docs/art/porter-mascot.png" alt="Porter mascot for the gate tools" width="260">
+</p>
+
 > **Written with AI.** This project was developed with the help of an AI
 > assistant (Anthropic's Claude, via Claude Code). The code has been reviewed
 > and tested, but treat it accordingly: read it before you run it, and see the
@@ -9,6 +13,10 @@ TCP proxy that computes a TLS ClientHello fingerprint (JA3 or JA4) and
 allows/blocks connections based on an approval store. Routes are generic
 (`--route LISTEN=BACKEND`, repeatable); fronting a mail server on IMAP (993)
 and SMTPS (465) is the common case but not the only one.
+
+`tlsgate` can run standalone or report observations to
+[Gatehub](https://github.com/kilo666mj/gatehub), the shared control plane for
+the `*gate` tools.
 
 https://github.com/user-attachments/assets/16ee363c-249f-4c97-a35c-2d30159c9f01
 
@@ -275,9 +283,7 @@ to every URL and treat any failed destination as a failed delivery.
   "control_plane": {
     "url": "https://gatehub.example.com",
     "instance_id": "mail-tls",
-    "client_cert": "/etc/gatehub/client.crt",
-    "client_key": "/etc/gatehub/client.key",
-    "ca": "/etc/gatehub/ca.crt",
+    "token": "replace-with-node-token",
     "sync_interval": "30s"
   },
   "alert_ranges": [
@@ -299,19 +305,19 @@ from `gatehub`. Configure `control_plane` in the JSON config used by `serve`:
   "control_plane": {
     "url": "https://gatehub.example.com",
     "instance_id": "mail-tls",
-    "client_cert": "/etc/gatehub/client.crt",
-    "client_key": "/etc/gatehub/client.key",
-    "ca": "/etc/gatehub/ca.crt",
-    "server_name": "gatehub.example.com",
+    "token": "replace-with-node-token",
     "sync_interval": "30s"
   }
 }
 ```
 
 When `control_plane.url` is empty or omitted, sync is disabled and `tlsgate`
-behaves exactly as before. The sync client uses mTLS, periodically uploads the
-local SQLite fingerprint state, then applies returned decisions locally with
-the same store path used by `approve --register`.
+behaves exactly as before. The sync client periodically uploads the local
+SQLite fingerprint state, then applies returned decisions locally with the same
+store path used by `approve --register`. Set `token` for bearer-token auth, or
+set `client_cert`, `client_key`, and `ca` for mTLS auth. The optional
+`server_name` field overrides TLS server-name verification when the URL host
+does not match the server certificate.
 
 ## Trusted source ranges (`approve_ranges`)
 
