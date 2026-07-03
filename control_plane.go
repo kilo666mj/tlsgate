@@ -15,6 +15,7 @@ import (
 )
 
 const defaultControlPlaneSyncInterval = 30 * time.Second
+const maxControlPlaneObservationValues = 128
 
 type ControlPlaneConfig struct {
 	URL          string `json:"url"`
@@ -189,8 +190,8 @@ func tlsObservation(fp string, entry Entry) controlPlaneObservation {
 		Label:       entry.Label,
 		FirstSeen:   entry.FirstSeen.UTC().Format(time.RFC3339Nano),
 		LastSeen:    entry.LastSeen.UTC().Format(time.RFC3339Nano),
-		IPs:         entry.IPs,
-		Ports:       entry.Ports,
+		IPs:         limitedStrings(entry.IPs, maxControlPlaneObservationValues),
+		Ports:       limitedInts(entry.Ports, maxControlPlaneObservationValues),
 		Count:       entry.Count,
 		Metadata: map[string]any{
 			"ja3":                  entry.TLS.JA3,
@@ -201,6 +202,24 @@ func tlsObservation(fp string, entry Entry) controlPlaneObservation {
 			"signature_algorithms": entry.TLS.SignatureAlgorithms,
 		},
 	}
+}
+
+func limitedStrings(values []string, max int) []string {
+	if max <= 0 || len(values) <= max {
+		return values
+	}
+	out := make([]string, max)
+	copy(out, values[:max])
+	return out
+}
+
+func limitedInts(values []int, max int) []int {
+	if max <= 0 || len(values) <= max {
+		return values
+	}
+	out := make([]int, max)
+	copy(out, values[:max])
+	return out
 }
 
 func (cfg ControlPlaneConfig) validate() error {
