@@ -13,15 +13,34 @@
     tlsgate_config: "{{ tlsgate_config_dir }}/config.json"
 
   tasks:
+    # Describe the checkout so a deployed host reports what it is actually
+    # running. Without this the binary keeps main.version's "dev" default, and
+    # `tlsgate version` on mx tells you nothing about which build it has.
+    - name: Describe the checkout for the version stamp
+      delegate_to: localhost
+      become: false
+      command:
+        cmd: git describe --tags --always --dirty
+        chdir: "{{ playbook_dir }}/.."
+      changed_when: false
+      failed_when: false
+      register: tlsgate_git_describe
+
     - name: Build binary for linux/{{ goarch }}
       delegate_to: localhost
       become: false
       command:
-        cmd: go build -o /tmp/tlsgate .
+        cmd: >-
+          go build -trimpath
+          -ldflags "-s -w -X main.version={{ tlsgate_version }}"
+          -o /tmp/tlsgate .
         chdir: "{{ playbook_dir }}/.."
       environment:
+        CGO_ENABLED: "0"
         GOOS: linux
         GOARCH: "{{ goarch }}"
+      vars:
+        tlsgate_version: "{{ tlsgate_git_describe.stdout | default('dev', true) | trim }}"
       changed_when: true
 
     - name: Create tlsgate system user
