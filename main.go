@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/kilo666mj/gatekit/store"
 )
 
 const defaultDB = "/var/lib/tlsgate/db.sqlite"
@@ -66,12 +68,12 @@ func cmdList(args []string) {
 	verbose := fs.Bool("v", false, "show full TLS metadata")
 	fs.Parse(args)
 
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
 
-	fps, err := store.List()
+	fps, err := st.List()
 	if err != nil {
 		fatalf("list fingerprints: %v", err)
 	}
@@ -96,6 +98,7 @@ func cmdList(args []string) {
 	}
 	for _, k := range keys {
 		e := fps[k]
+		tls := tlsMetaOf(e)
 		label := e.Label
 		if label == "" {
 			label = "-"
@@ -108,21 +111,21 @@ func cmdList(args []string) {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
-				displayValue(e.TLS.SNI),
-				displayValue(strings.Join(e.TLS.ALPN, ",")),
-				displayValue(tlsVersionList(e.TLS.SupportedVersions)),
-				displayValue(signatureAlgorithmList(e.TLS.SignatureAlgorithms)),
-				displayValue(e.TLS.JA3),
-				displayValue(e.TLS.JA4),
+				displayValue(tls.SNI),
+				displayValue(strings.Join(tls.ALPN, ",")),
+				displayValue(tlsVersionList(tls.SupportedVersions)),
+				displayValue(signatureAlgorithmList(tls.SignatureAlgorithms)),
+				displayValue(tls.JA3),
+				displayValue(tls.JA4),
 				displayValue(ips),
 			)
 		} else {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
 				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
-				displayValue(e.TLS.SNI),
-				displayValue(strings.Join(e.TLS.ALPN, ",")),
-				displayValue(tlsVersionList(e.TLS.SupportedVersions)),
+				displayValue(tls.SNI),
+				displayValue(strings.Join(tls.ALPN, ",")),
+				displayValue(tlsVersionList(tls.SupportedVersions)),
 				displayValue(ips),
 			)
 		}
@@ -137,8 +140,8 @@ func listEntryLess(fpA string, a Entry, fpB string, b Entry) bool {
 	if statusRank(a.Status) != statusRank(b.Status) {
 		return statusRank(a.Status) < statusRank(b.Status)
 	}
-	if !a.FirstSeen.Equal(b.FirstSeen) {
-		return a.FirstSeen.Before(b.FirstSeen)
+	if !a.FirstSeen.Equal(b.FirstSeen.Time) {
+		return a.FirstSeen.Before(b.FirstSeen.Time)
 	}
 	return fpA < fpB
 }
@@ -249,22 +252,22 @@ func cmdApprove(args []string) {
 		fatalf("usage: approve [--label <name>] [--register] <fingerprint>")
 	}
 	fp := fs.Arg(0)
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
 	if *register {
-		if err := registerStatus(store, fp, StatusApproved, *label); err != nil {
+		if err := registerStatus(st, fp, StatusApproved, *label); err != nil {
 			fatalf("%v", err)
 		}
 		fmt.Printf("approved %s\n", fp)
 		return
 	}
-	if err := store.SetStatus(fp, StatusApproved); err != nil {
+	if err := st.SetStatus(fp, StatusApproved); err != nil {
 		fatalf("%v", err)
 	}
 	if *label != "" {
-		if err := store.SetLabel(fp, *label); err != nil {
+		if err := st.SetLabel(fp, *label); err != nil {
 			fatalf("%v", err)
 		}
 	}
@@ -281,22 +284,22 @@ func cmdBlock(args []string) {
 		fatalf("usage: block [--label <name>] [--register] <fingerprint>")
 	}
 	fp := fs.Arg(0)
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
 	if *register {
-		if err := registerStatus(store, fp, StatusBlocked, *label); err != nil {
+		if err := registerStatus(st, fp, StatusBlocked, *label); err != nil {
 			fatalf("%v", err)
 		}
 		fmt.Printf("blocked %s\n", fp)
 		return
 	}
-	if err := store.SetStatus(fp, StatusBlocked); err != nil {
+	if err := st.SetStatus(fp, StatusBlocked); err != nil {
 		fatalf("%v", err)
 	}
 	if *label != "" {
-		if err := store.SetLabel(fp, *label); err != nil {
+		if err := st.SetLabel(fp, *label); err != nil {
 			fatalf("%v", err)
 		}
 	}
@@ -307,15 +310,15 @@ func cmdBlock(args []string) {
 // yet. The fingerprint is validated against the database's recorded method so
 // a typo cannot create a permanent junk allow/block entry; when no method is
 // recorded yet, either a JA3 or JA4 fingerprint is accepted.
-func registerStatus(store *Store, fp string, status Status, label string) error {
-	method, err := store.GetMeta(metaFingerprintMethod)
+func registerStatus(st *store.Store, fp string, status Status, label string) error {
+	method, err := st.GetMeta(metaFingerprintMethod)
 	if err != nil {
 		return err
 	}
 	if !validFingerprintForMethod(fp, FingerprintMethod(method)) {
 		return fmt.Errorf("--register requires a full %s fingerprint, got %q", expectedFingerprintDesc(method), fp)
 	}
-	return store.UpsertStatus(fp, status, label)
+	return st.UpsertStatus(fp, status, label)
 }
 
 func validFingerprintForMethod(fp string, method FingerprintMethod) bool {
@@ -347,11 +350,11 @@ func cmdLabel(args []string) {
 	if fs.NArg() < 2 {
 		fatalf("usage: label <fingerprint> <name>")
 	}
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
-	if err := store.SetLabel(fs.Arg(0), fs.Arg(1)); err != nil {
+	if err := st.SetLabel(fs.Arg(0), fs.Arg(1)); err != nil {
 		fatalf("%v", err)
 	}
 	fmt.Printf("labeled %s as %q\n", fs.Arg(0), fs.Arg(1))
@@ -364,11 +367,11 @@ func cmdDelete(args []string) {
 	if fs.NArg() == 0 {
 		fatalf("usage: delete <fingerprint>")
 	}
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
-	if err := store.Delete(fs.Arg(0)); err != nil {
+	if err := st.Delete(fs.Arg(0)); err != nil {
 		fatalf("%v", err)
 	}
 	fmt.Printf("deleted %s\n", fs.Arg(0))
@@ -380,7 +383,7 @@ func cmdReset(args []string) {
 	fingerprint := fs.String("fingerprint", "", "fingerprint method to record after the reset: ja3 or ja4 (default: keep the database's current method)")
 	fs.Parse(args)
 
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
@@ -390,7 +393,7 @@ func cmdReset(args []string) {
 	// already records so a plain reset does not change the keyspace.
 	var method FingerprintMethod
 	if *fingerprint == "" {
-		stored, err := store.GetMeta(metaFingerprintMethod)
+		stored, err := st.GetMeta(metaFingerprintMethod)
 		if err != nil {
 			fatalf("read stored method: %v", err)
 		}
@@ -402,12 +405,12 @@ func cmdReset(args []string) {
 		}
 	}
 
-	purged, err := store.ResetFingerprints()
+	purged, err := st.ResetFingerprints()
 	if err != nil {
 		fatalf("reset fingerprints: %v", err)
 	}
 	if method != "" {
-		if err := store.SetMeta(metaFingerprintMethod, string(method)); err != nil {
+		if err := st.SetMeta(metaFingerprintMethod, string(method)); err != nil {
 			fatalf("record method: %v", err)
 		}
 		fmt.Printf("reset %d fingerprint(s); method recorded as %s\n", purged, method)

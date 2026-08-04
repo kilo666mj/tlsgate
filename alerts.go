@@ -13,6 +13,8 @@ import (
 
 	"github.com/containrrr/shoutrrr"
 	"github.com/containrrr/shoutrrr/pkg/types"
+	"github.com/kilo666mj/gatekit/controlplane"
+	"github.com/kilo666mj/gatekit/store"
 )
 
 const defaultConfig = "/var/lib/tlsgate/config.json"
@@ -44,8 +46,8 @@ type AppConfig struct {
 	// approved, so the same fp from a non-whitelisted IP is still gated.
 	// New fingerprints from whitelisted IPs are still recorded as pending
 	// for visibility.
-	ApproveRanges []string           `json:"approve_ranges"`
-	ControlPlane  ControlPlaneConfig `json:"control_plane"`
+	ApproveRanges []string            `json:"approve_ranges"`
+	ControlPlane  controlplane.Config `json:"control_plane"`
 }
 
 // ipAllowlist holds the parsed ApproveRanges CIDRs and answers whether a
@@ -101,7 +103,7 @@ type BlockedRangeAlerter struct {
 }
 
 type blockedRangeAlert struct {
-	store     *Store
+	store     *store.Store
 	rangeName string
 	ip        string
 	fp        string
@@ -211,7 +213,7 @@ func NewBlockedRangeAlerter(cfg AppConfig) (*BlockedRangeAlerter, error) {
 	return a, nil
 }
 
-func (a *BlockedRangeAlerter) AlertBlocked(store *Store, ip string, port int, fp string, meta TLSMetadata) {
+func (a *BlockedRangeAlerter) AlertBlocked(st *store.Store, ip string, port int, fp string, meta TLSMetadata) {
 	if a == nil {
 		return
 	}
@@ -223,7 +225,7 @@ func (a *BlockedRangeAlerter) AlertBlocked(store *Store, ip string, port int, fp
 		if !r.contains(addr) {
 			continue
 		}
-		alreadySent, err := store.HasBlockedRangeAlert(r.name, ip)
+		alreadySent, err := st.HasBlockedRangeAlert(r.name, ip)
 		if err != nil {
 			log.Printf("[%s:%d] blocked range alert dedupe error: %v", ip, port, err)
 			continue
@@ -232,7 +234,7 @@ func (a *BlockedRangeAlerter) AlertBlocked(store *Store, ip string, port int, fp
 			continue
 		}
 		alert := blockedRangeAlert{
-			store:     store,
+			store:     st,
 			rangeName: r.name,
 			ip:        ip,
 			fp:        fp,

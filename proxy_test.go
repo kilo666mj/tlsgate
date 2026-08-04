@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kilo666mj/gatekit/ratelimit"
+	"github.com/kilo666mj/gatekit/store"
 )
 
 // truncatedClientHello is a complete TLS handshake record (type 0x16)
@@ -63,13 +66,13 @@ func TestEnsureDir(t *testing.T) {
 	}
 }
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	store, err := NewStore(filepath.Join(t.TempDir(), "db.sqlite"))
+	st, err := NewStore(filepath.Join(t.TempDir(), "db.sqlite"))
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	return store
+	return st
 }
 
 // backendRecorder starts a loopback listener standing in for the mail
@@ -137,13 +140,13 @@ func expectNoBackend(t *testing.T, got <-chan []byte) {
 
 func TestHandleConnBlocksUnparseableWhenBlockUnknown(t *testing.T) {
 	backend, got := backendRecorder(t)
-	store := newTestStore(t)
+	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(clientConn, backend, 993, store, true, MethodJA3, nil, nil, ipAllowlist{})
+		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, ipAllowlist{})
 		close(done)
 	}()
 	go testConn.Write(truncatedClientHello)
@@ -158,11 +161,11 @@ func TestHandleConnBlocksUnparseableWhenBlockUnknown(t *testing.T) {
 
 func TestHandleConnForwardsUnparseableWhenAllowUnknown(t *testing.T) {
 	backend, got := backendRecorder(t)
-	store := newTestStore(t)
+	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
-	go handleConn(clientConn, backend, 993, store, false, MethodJA3, nil, nil, ipAllowlist{})
+	go handleConn(clientConn, backend, 993, st, false, MethodJA3, nil, nil, ipAllowlist{})
 	go testConn.Write(truncatedClientHello)
 
 	select {
@@ -177,11 +180,11 @@ func TestHandleConnForwardsUnparseableWhenAllowUnknown(t *testing.T) {
 
 func TestHandleConnBlocksNonTLSWhenBlockUnknown(t *testing.T) {
 	backend, got := backendRecorder(t)
-	store := newTestStore(t)
+	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
-	go handleConn(clientConn, backend, 993, store, true, MethodJA3, nil, nil, ipAllowlist{})
+	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, ipAllowlist{})
 	go testConn.Write([]byte("HELO plain\r\n"))
 
 	expectNoBackend(t, got)
@@ -189,11 +192,11 @@ func TestHandleConnBlocksNonTLSWhenBlockUnknown(t *testing.T) {
 
 func TestHandleConnRejectsOversizedRecord(t *testing.T) {
 	backend, got := backendRecorder(t)
-	store := newTestStore(t)
+	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
-	go handleConn(clientConn, backend, 993, store, true, MethodJA3, nil, nil, ipAllowlist{})
+	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, ipAllowlist{})
 	// 0x16 record header declaring a 65535-byte body, far above maxTLSRecordBody.
 	go testConn.Write([]byte{0x16, 0x03, 0x01, 0xff, 0xff})
 
@@ -202,14 +205,14 @@ func TestHandleConnRejectsOversizedRecord(t *testing.T) {
 
 func TestHandleConnDropsRateLimitedConnection(t *testing.T) {
 	backend, got := backendRecorder(t)
-	store := newTestStore(t)
-	limiter := newRateLimiter(0, 0, time.Minute) // no tokens: every IP denied
+	st := newTestStore(t)
+	limiter := ratelimit.New(0, 0, time.Minute) // no tokens: every IP denied
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(clientConn, backend, 993, store, true, MethodJA3, nil, limiter, ipAllowlist{})
+		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, limiter, ipAllowlist{})
 		close(done)
 	}()
 
@@ -308,11 +311,11 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractTLSMetadata: %v", err)
 	}
-	store := newTestStore(t)
-	if _, err := store.Seen(fp, "127.0.0.1", 993, meta, false); err != nil {
+	st := newTestStore(t)
+	if _, err := st.Observe(store.Observation{Fingerprint: fp, IP: "127.0.0.1", Port: 993, Meta: meta.toMeta()}, false); err != nil {
 		t.Fatalf("Seen: %v", err)
 	}
-	if err := store.SetStatus(fp, StatusApproved); err != nil {
+	if err := st.SetStatus(fp, StatusApproved); err != nil {
 		t.Fatalf("SetStatus: %v", err)
 	}
 
@@ -345,7 +348,7 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
-	go handleConn(clientConn, ln.Addr().String(), 993, store, true, MethodJA3, nil, nil, ipAllowlist{})
+	go handleConn(clientConn, ln.Addr().String(), 993, st, true, MethodJA3, nil, nil, ipAllowlist{})
 
 	go func() {
 		testConn.Write(hello)

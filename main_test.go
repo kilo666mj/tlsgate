@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kilo666mj/gatekit/store"
 )
 
 // muteStdout silences the fmt.Printf confirmations the CLI commands emit so
@@ -57,7 +59,7 @@ func TestCLIMutators(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	if _, err := seed.Seen("fp1", "192.0.2.10", 993, TLSMetadata{}, false); err != nil {
+	if _, err := seed.Observe(store.Observation{Fingerprint: "fp1", IP: "192.0.2.10", Port: 993, Meta: TLSMetadata{}.toMeta()}, false); err != nil {
 		t.Fatalf("Seen: %v", err)
 	}
 
@@ -103,7 +105,7 @@ func TestCmdRegister(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	if _, err := seed.ReconcileFingerprintMethod(MethodJA3, false); err != nil {
+	if _, err := seed.ReconcileFingerprintMethod(string(MethodJA3), false); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
@@ -175,10 +177,10 @@ func TestCmdReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	if _, err := seed.ReconcileFingerprintMethod(MethodJA3, false); err != nil {
+	if _, err := seed.ReconcileFingerprintMethod(string(MethodJA3), false); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if _, err := seed.Seen("fp1", "192.0.2.10", 993, TLSMetadata{}, false); err != nil {
+	if _, err := seed.Observe(store.Observation{Fingerprint: "fp1", IP: "192.0.2.10", Port: 993, Meta: TLSMetadata{}.toMeta()}, false); err != nil {
 		t.Fatalf("Seen: %v", err)
 	}
 
@@ -210,11 +212,11 @@ func TestCmdReset(t *testing.T) {
 func TestListEntryOrder(t *testing.T) {
 	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	entries := map[string]Entry{
-		"low-approved":    {Status: StatusApproved, Count: 1, FirstSeen: now.Add(-4 * time.Minute)},
-		"high-pending":    {Status: StatusPending, Count: 3, FirstSeen: now.Add(-3 * time.Minute)},
-		"high-blocked":    {Status: StatusBlocked, Count: 3, FirstSeen: now.Add(-2 * time.Minute)},
-		"high-approved":   {Status: StatusApproved, Count: 3, FirstSeen: now.Add(-1 * time.Minute)},
-		"middle-approved": {Status: StatusApproved, Count: 2, FirstSeen: now},
+		"low-approved":    {Status: StatusApproved, Count: 1, FirstSeen: store.Time{Time: now.Add(-4 * time.Minute)}},
+		"high-pending":    {Status: StatusPending, Count: 3, FirstSeen: store.Time{Time: now.Add(-3 * time.Minute)}},
+		"high-blocked":    {Status: StatusBlocked, Count: 3, FirstSeen: store.Time{Time: now.Add(-2 * time.Minute)}},
+		"high-approved":   {Status: StatusApproved, Count: 3, FirstSeen: store.Time{Time: now.Add(-1 * time.Minute)}},
+		"middle-approved": {Status: StatusApproved, Count: 2, FirstSeen: store.Time{Time: now}},
 	}
 	keys := []string{"low-approved", "high-pending", "high-blocked", "high-approved", "middle-approved"}
 
@@ -266,7 +268,7 @@ func TestDisplayValueSanitizesControlCharacters(t *testing.T) {
 
 func TestCmdListSanitizesStoredMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db.sqlite")
-	store, err := NewStore(path)
+	st, err := NewStore(path)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -276,10 +278,10 @@ func TestCmdListSanitizesStoredMetadata(t *testing.T) {
 		SNI:  "mail\x1b[31m.example\n.com",
 		ALPN: []string{"imap\x1b[2J"},
 	}
-	if _, err := store.Seen("fp\x1b[0m", "192.0.2.10", 993, meta, false); err != nil {
+	if _, err := st.Observe(store.Observation{Fingerprint: "fp\x1b[0m", IP: "192.0.2.10", Port: 993, Meta: meta.toMeta()}, false); err != nil {
 		t.Fatalf("Seen: %v", err)
 	}
-	if err := store.SetLabel("fp\x1b[0m", "label\x1b[31m"); err != nil {
+	if err := st.SetLabel("fp\x1b[0m", "label\x1b[31m"); err != nil {
 		t.Fatalf("SetLabel: %v", err)
 	}
 
