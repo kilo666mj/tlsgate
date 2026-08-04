@@ -42,11 +42,11 @@ func cmdCorrelate(args []string) {
 		fatalf("usage: correlate [--log <path>] [--window <duration>] <fingerprint>")
 	}
 
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
 	}
-	fps, err := store.List()
+	fps, err := st.List()
 	if err != nil {
 		fatalf("list fingerprints: %v", err)
 	}
@@ -136,7 +136,7 @@ func correlateSyslog(path string, entry Entry, window time.Duration, limit int) 
 		if !ok {
 			continue
 		}
-		when, ok := parseSyslogTime(line, entry.LastSeen)
+		when, ok := parseSyslogTime(line, entry.LastSeen.Time)
 		if !ok {
 			continue
 		}
@@ -204,7 +204,7 @@ func ipBoundaryByte(line string, i int) bool {
 }
 
 func withinCorrelationWindows(t time.Time, entry Entry, window time.Duration) bool {
-	return withinWindow(t, entry.FirstSeen, window) || withinWindow(t, entry.LastSeen, window)
+	return withinWindow(t, entry.FirstSeen.Time, window) || withinWindow(t, entry.LastSeen.Time, window)
 }
 
 func withinWindow(t, center time.Time, window time.Duration) bool {

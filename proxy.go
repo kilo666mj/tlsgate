@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kilo666mj/gatekit/controlplane"
+	"github.com/kilo666mj/gatekit/ratelimit"
+	"github.com/kilo666mj/gatekit/semaphore"
+	"github.com/kilo666mj/gatekit/store"
 )
 
 const recordTypeHandshake = 0x16
@@ -84,7 +90,7 @@ func cmdServe(args []string) {
 		log.Fatalf("create db dir: %v", err)
 	}
 
-	store, err := NewStore(*dbPath)
+	st, err := NewStore(*dbPath)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
@@ -92,7 +98,7 @@ func cmdServe(args []string) {
 	// The fp keyspace is method-specific, so guard against an accidental
 	// ja3<->ja4 switch silently orphaning every approval and block. Purging
 	// is opt-in via --reset-fingerprints.
-	if purged, err := store.ReconcileFingerprintMethod(method, *resetFingerprints); err != nil {
+	if purged, err := st.ReconcileFingerprintMethod(string(method), *resetFingerprints); err != nil {
 		log.Fatalf("%v", err)
 	} else if purged > 0 {
 		log.Printf("reset %d fingerprint(s) switching to method %s", purged, method)
@@ -121,7 +127,7 @@ func cmdServe(args []string) {
 	if cfg.MaxFingerprints > 0 {
 		log.Printf("max fingerprints: %d", cfg.MaxFingerprints)
 		prune := func() {
-			if n, err := store.PruneToLimit(cfg.MaxFingerprints); err != nil {
+			if n, err := st.PruneToLimit(cfg.MaxFingerprints); err != nil {
 				log.Printf("prune fingerprints: %v", err)
 			} else if n > 0 {
 				log.Printf("pruned %d fingerprint(s) over limit %d", n, cfg.MaxFingerprints)
@@ -136,16 +142,18 @@ func cmdServe(args []string) {
 			}
 		}()
 	}
-	startControlPlaneSync(store, cfg.ControlPlane)
+	if err := controlplane.Start(context.Background(), st, cfg.ControlPlane); err != nil {
+		log.Fatalf("control plane: %v", err)
+	}
 
 	// One limiter shared across all listeners so a source IP's budget
 	// spans every route combined rather than doubling per port.
-	limiter := newRateLimiter(connRatePerIP, connBurstPerIP, rateLimitTTL)
-	go limiter.runSweeper(rateSweepPeriod)
+	limiter := ratelimit.New(connRatePerIP, connBurstPerIP, rateLimitTTL)
+	go limiter.RunSweeper(rateSweepPeriod, nil)
 
 	// One semaphore shared across all listeners so the cap is a global
 	// ceiling on concurrent connections, not per-port.
-	sem := newSemaphore(maxConcurrentConns)
+	sem := semaphore.New(maxConcurrentConns)
 
 	log.Printf("fingerprint method: %s", method)
 	blockUnknown := !*allowUnknown
@@ -153,9 +161,9 @@ func cmdServe(args []string) {
 	// the main goroutine so the process stays up.
 	for i, rt := range routes {
 		if i == len(routes)-1 {
-			listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem, allow)
+			listenAndProxy(rt.listen, rt.backend, rt.port, st, blockUnknown, method, alerter, limiter, sem, allow)
 		} else {
-			go listenAndProxy(rt.listen, rt.backend, rt.port, store, blockUnknown, method, alerter, limiter, sem, allow)
+			go listenAndProxy(rt.listen, rt.backend, rt.port, st, blockUnknown, method, alerter, limiter, sem, allow)
 		}
 	}
 }
@@ -192,7 +200,7 @@ func (r *routeFlag) Set(v string) error {
 	return nil
 }
 
-func listenAndProxy(listen, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter, sem *semaphore, allow ipAllowlist) {
+func listenAndProxy(listen, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, sem *semaphore.Semaphore, allow ipAllowlist) {
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		log.Fatalf("listen %s: %v", listen, err)
@@ -206,20 +214,20 @@ func listenAndProxy(listen, backend string, port int, store *Store, blockUnknown
 		}
 		// Cap total in-flight connections before spending a goroutine or
 		// backend socket on this one.
-		if !sem.acquire() {
+		if !sem.Acquire() {
 			clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			log.Printf("[%s:%d] OVERLOAD at capacity, dropping connection", clientIP, port)
 			conn.Close()
 			continue
 		}
 		go func() {
-			defer sem.release()
-			handleConn(conn, backend, port, store, blockUnknown, method, alerter, limiter, allow)
+			defer sem.Release()
+			handleConn(conn, backend, port, st, blockUnknown, method, alerter, limiter, allow)
 		}()
 	}
 }
 
-func handleConn(client net.Conn, backend string, port int, store *Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *rateLimiter, allow ipAllowlist) {
+func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow ipAllowlist) {
 	defer client.Close()
 
 	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
@@ -233,7 +241,7 @@ func handleConn(client net.Conn, backend string, port int, store *Store, blockUn
 
 	// Drop floods before any read or DB write so a single IP cannot pin
 	// goroutines or grow the fingerprint store with randomized handshakes.
-	if !limiter.allow(clientIP) {
+	if !limiter.Allow(clientIP) {
 		log.Printf("[%s:%d] RATELIMIT dropping connection", clientIP, port)
 		return
 	}
@@ -269,19 +277,24 @@ func handleConn(client net.Conn, backend string, port int, store *Store, blockUn
 		} else {
 			// Record new whitelisted fingerprints as pending (not blocked)
 			// for visibility, without ever approving them.
-			status, err := store.Seen(fp, clientIP, port, meta, blockThis)
+			entry, err := st.Observe(store.Observation{
+				Fingerprint: fp,
+				IP:          clientIP,
+				Port:        port,
+				Meta:        meta.toMeta(),
+			}, blockThis)
 			if err != nil {
 				log.Printf("[%s:%d] store error: %v; failing closed", clientIP, port, err)
 				return
 			}
-			switch status {
+			switch entry.Status {
 			case StatusBlocked:
 				if whitelisted {
 					log.Printf("[%s:%d] WHITELIST forwarding blocked fp=%s", clientIP, port, fp)
 					break
 				}
 				log.Printf("[%s:%d] BLOCKED  fp=%s", clientIP, port, fp)
-				alerter.AlertBlocked(store, clientIP, port, fp, meta)
+				alerter.AlertBlocked(st, clientIP, port, fp, meta)
 				return
 			case StatusPending:
 				tag := "PENDING "

@@ -109,15 +109,20 @@ func TestLoadConfigParsesControlPlane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg.ControlPlane.InstanceID != "mail-tls" || cfg.ControlPlane.interval() != 45*time.Second {
+	// URL construction and interval defaulting are gatekit's, tested there.
+	// What matters here is that tlsgate's config file still decodes into the
+	// shared type with every field populated.
+	if cfg.ControlPlane.InstanceID != "mail-tls" || cfg.ControlPlane.Interval() != 45*time.Second {
 		t.Fatalf("control plane config = %+v", cfg.ControlPlane)
 	}
-	u, err := controlPlaneURL(cfg.ControlPlane.URL, "/v1/policy", cfg.ControlPlane.InstanceID, "cursor")
-	if err != nil {
-		t.Fatalf("controlPlaneURL: %v", err)
+	if cfg.ControlPlane.URL != "https://gatehub.example.com/base" {
+		t.Fatalf("control plane url = %q", cfg.ControlPlane.URL)
 	}
-	if want := "https://gatehub.example.com/base/v1/policy?instance_id=mail-tls&since=cursor"; u != want {
-		t.Fatalf("controlPlaneURL = %q, want %q", u, want)
+	if cfg.ControlPlane.CA != "/etc/gatehub/ca.crt" || cfg.ControlPlane.ServerName != "gatehub.example.com" {
+		t.Fatalf("control plane mTLS fields = %+v", cfg.ControlPlane)
+	}
+	if err := cfg.ControlPlane.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 }
 
@@ -163,7 +168,7 @@ func TestLoadConfigAllowsSecureNotificationURLs(t *testing.T) {
 }
 
 func TestBlockedRangeAlerterDedupesByRangeAndIP(t *testing.T) {
-	store := newTestStore(t)
+	st := newTestStore(t)
 	alerter := newTestAlerter(t, "scanner-net", "192.0.2.0/24")
 	messages := make(chan string, 4)
 	alerter.send = func(text string) error {
@@ -172,9 +177,9 @@ func TestBlockedRangeAlerterDedupesByRangeAndIP(t *testing.T) {
 	}
 
 	meta := TLSMetadata{SNI: "webmail.example.com", JA3: "771,4865,0-23,29,0"}
-	alerter.AlertBlocked(store, "192.0.2.10", 993, "fp1", meta)
-	alerter.AlertBlocked(store, "192.0.2.10", 993, "fp2", meta)
-	alerter.AlertBlocked(store, "198.51.100.10", 993, "fp3", meta)
+	alerter.AlertBlocked(st, "192.0.2.10", 993, "fp1", meta)
+	alerter.AlertBlocked(st, "192.0.2.10", 993, "fp2", meta)
+	alerter.AlertBlocked(st, "198.51.100.10", 993, "fp3", meta)
 
 	var msg string
 	select {
@@ -195,7 +200,7 @@ func TestBlockedRangeAlerterDedupesByRangeAndIP(t *testing.T) {
 }
 
 func TestBlockedRangeAlerterRetriesAfterSendFailure(t *testing.T) {
-	store := newTestStore(t)
+	st := newTestStore(t)
 	alerter := newTestAlerter(t, "scanner-net", "192.0.2.0/24")
 	var attempts atomic.Int32
 	alerter.send = func(_ string) error {
@@ -205,9 +210,9 @@ func TestBlockedRangeAlerterRetriesAfterSendFailure(t *testing.T) {
 		return nil
 	}
 
-	alerter.AlertBlocked(store, "192.0.2.10", 993, "fp1", TLSMetadata{})
+	alerter.AlertBlocked(st, "192.0.2.10", 993, "fp1", TLSMetadata{})
 	waitFor(t, func() bool { return attempts.Load() == 1 })
-	alerter.AlertBlocked(store, "192.0.2.10", 993, "fp1", TLSMetadata{})
+	alerter.AlertBlocked(st, "192.0.2.10", 993, "fp1", TLSMetadata{})
 	waitFor(t, func() bool { return attempts.Load() == 2 })
 	if attempts.Load() != 2 {
 		t.Fatalf("attempts = %d, want 2", attempts.Load())

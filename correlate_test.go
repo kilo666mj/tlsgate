@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kilo666mj/gatekit/store"
 )
 
 func TestFindFingerprintAllowsUniquePrefix(t *testing.T) {
@@ -82,8 +84,8 @@ func TestCorrelateSyslog(t *testing.T) {
 	}
 
 	entry := Entry{
-		FirstSeen: time.Date(2026, time.May, 29, 14, 39, 54, 0, time.Local),
-		LastSeen:  time.Date(2026, time.May, 29, 14, 39, 54, 0, time.Local),
+		FirstSeen: store.Time{Time: time.Date(2026, time.May, 29, 14, 39, 54, 0, time.Local)},
+		LastSeen:  store.Time{Time: time.Date(2026, time.May, 29, 14, 39, 54, 0, time.Local)},
 		IPs:       []string{"192.0.2.10"},
 	}
 	matches, err := correlateSyslog(logPath, entry, 2*time.Minute, 100)
@@ -112,8 +114,8 @@ func TestCorrelateSyslogMatchesSOGoRFC3339Lines(t *testing.T) {
 	}
 
 	entry := Entry{
-		FirstSeen: time.Date(2026, time.May, 29, 14, 19, 27, 0, time.FixedZone("", 2*60*60)),
-		LastSeen:  time.Date(2026, time.May, 29, 15, 2, 10, 0, time.FixedZone("", 2*60*60)),
+		FirstSeen: store.Time{Time: time.Date(2026, time.May, 29, 14, 19, 27, 0, time.FixedZone("", 2*60*60))},
+		LastSeen:  store.Time{Time: time.Date(2026, time.May, 29, 15, 2, 10, 0, time.FixedZone("", 2*60*60))},
 		IPs:       []string{"2001:db8:a64c:1500:182a:21ee:97b3:53b0"},
 	}
 	matches, err := correlateSyslog(logPath, entry, time.Hour, 100)
