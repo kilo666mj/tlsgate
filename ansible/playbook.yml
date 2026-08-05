@@ -117,7 +117,20 @@
       systemd:
         daemon_reload: true
 
+    # reload-or-restart performs a graceful upgrade when tlsgate is already
+    # running: systemctl runs ExecReload (SIGHUP), tableflip re-execs the new
+    # binary and hands off the listening sockets, and live IMAP and SMTP
+    # sessions survive the deploy. It falls back to a start/restart when the
+    # service is not running yet.
+    #
+    # NOTE: the first deploy of a tableflip-capable binary must still be a hard
+    # restart. A pre-tableflip tlsgate treats SIGHUP as a clean stop and never
+    # comes back, so reloading one is how a deploy takes mail down instead of
+    # keeping it up. Once every host in the inventory is confirmed to be
+    # running a tableflip build, this is safe.
     - name: Restart tlsgate
-      systemd:
-        name: tlsgate
-        state: restarted
+      ansible.builtin.command:
+        cmd: systemctl reload-or-restart tlsgate
+      changed_when: true
+      async: 45
+      poll: 0

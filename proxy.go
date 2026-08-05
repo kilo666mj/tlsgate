@@ -2,16 +2,23 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/cloudflare/tableflip"
 
 	"github.com/kilo666mj/gatekit/controlplane"
 	"github.com/kilo666mj/gatekit/ratelimit"
@@ -56,6 +63,22 @@ const maxConcurrentConns = 1024
 // configured max_fingerprints cap, if one is set.
 const fingerprintPrunePeriod = time.Minute
 
+const (
+	// shutdownGrace bounds how long serve waits for in-flight connections to
+	// drain after a SIGINT/SIGTERM before exiting anyway.
+	shutdownGrace = 10 * time.Second
+
+	// defaultDrainTimeout caps how long a process that has handed off to a new
+	// binary (via SIGHUP/tableflip) keeps running to let its existing proxied
+	// sessions finish. 0 means wait indefinitely.
+	//
+	// An hour, modeled on nginx's worker_shutdown_timeout. It has to comfortably
+	// exceed idleTimeout above, because an IMAP IDLE session legitimately sits
+	// quiet for half an hour and killing it on a deploy is precisely the
+	// interruption this exists to avoid.
+	defaultDrainTimeout = time.Hour
+)
+
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	var routes routeFlag
@@ -65,6 +88,7 @@ func cmdServe(args []string) {
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
 	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when --fingerprint differs from the database's method")
+	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "on upgrade/shutdown, how long to wait for existing connections to finish (0 = forever)")
 	fs.Parse(args)
 
 	if len(routes) == 0 {
@@ -72,6 +96,49 @@ func cmdServe(args []string) {
 	}
 
 	log.Printf("tlsgate %s starting", version)
+
+	// tableflip coordinates a zero-downtime handoff: on SIGHUP it re-execs the
+	// (possibly newly installed) binary, passes it the listening sockets over
+	// an inherited control fd, and lets this process keep serving its existing
+	// connections until they drain.
+	//
+	// tlsgate fronts IMAPS and SMTPS on the mail host, so a hard restart drops
+	// live mail sessions mid-transfer. That is a deploy interrupting mail,
+	// which is a poor trade for updating a noise filter.
+	upg, err := tableflip.New(tableflip.Options{})
+	if err != nil {
+		log.Fatalf("tableflip init: %v", err)
+	}
+	defer upg.Stop()
+
+	// terminating distinguishes a stop (SIGTERM/SIGINT) from an upgrade
+	// handoff once upg.Exit() unblocks, so each can pick the right drain
+	// deadline: a handoff can afford to wait for a long IMAP IDLE, a shutdown
+	// cannot.
+	var terminating atomic.Bool
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+		for s := range sig {
+			if s == syscall.SIGHUP {
+				log.Printf("SIGHUP: starting upgrade")
+				if err := upg.Upgrade(); err != nil {
+					log.Printf("upgrade failed: %v", err)
+				}
+				continue
+			}
+			log.Printf("%s: shutting down", s)
+			terminating.Store(true)
+			upg.Stop()
+			return
+		}
+	}()
+
+	// bgCtx stops background writers (pruning, control-plane sync) once this
+	// process is draining, so a departing process stops touching the shared
+	// database while a newer one owns it.
+	bgCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
 
 	// tlsgate needs no root privilege: binding low ports should be granted
 	// narrowly via CAP_NET_BIND_SERVICE (systemd AmbientCapabilities or the
@@ -137,19 +204,24 @@ func cmdServe(args []string) {
 		go func() {
 			t := time.NewTicker(fingerprintPrunePeriod)
 			defer t.Stop()
-			for range t.C {
-				prune()
+			for {
+				select {
+				case <-bgCtx.Done():
+					return
+				case <-t.C:
+					prune()
+				}
 			}
 		}()
 	}
-	if err := controlplane.Start(context.Background(), st, cfg.ControlPlane); err != nil {
+	if err := controlplane.Start(bgCtx, st, cfg.ControlPlane); err != nil {
 		log.Fatalf("control plane: %v", err)
 	}
 
 	// One limiter shared across all listeners so a source IP's budget
 	// spans every route combined rather than doubling per port.
 	limiter := ratelimit.New(connRatePerIP, connBurstPerIP, rateLimitTTL)
-	go limiter.RunSweeper(rateSweepPeriod, nil)
+	go limiter.RunSweeper(rateSweepPeriod, bgCtx.Done())
 
 	// One semaphore shared across all listeners so the cap is a global
 	// ceiling on concurrent connections, not per-port.
@@ -157,14 +229,71 @@ func cmdServe(args []string) {
 
 	log.Printf("fingerprint method: %s", method)
 	blockUnknown := !*allowUnknown
-	// Run every route but the last in its own goroutine; the last holds
-	// the main goroutine so the process stays up.
-	for i, rt := range routes {
-		if i == len(routes)-1 {
-			listenAndProxy(rt.listen, rt.backend, rt.port, st, blockUnknown, method, alerter, limiter, sem, allow)
-		} else {
-			go listenAndProxy(rt.listen, rt.backend, rt.port, st, blockUnknown, method, alerter, limiter, sem, allow)
+
+	// connWG tracks in-flight connections so the drain phase can wait for them.
+	var connWG sync.WaitGroup
+	var listeners []net.Listener
+	for _, rt := range routes {
+		// upg.Listen rather than net.Listen: on an upgrade the socket is
+		// inherited from the departing process rather than rebound, so no
+		// connection is refused in the gap between the two.
+		ln, err := upg.Listen("tcp", rt.listen)
+		if err != nil {
+			log.Fatalf("listen %s: %v", rt.listen, err)
 		}
+		listeners = append(listeners, ln)
+		log.Printf("listening on %s -> %s", rt.listen, rt.backend)
+		go serveListener(ln, rt, st, blockUnknown, method, alerter, limiter, sem, allow, &connWG)
+	}
+
+	if err := upg.Ready(); err != nil {
+		log.Fatalf("tableflip ready: %v", err)
+	}
+	notifyReady()
+
+	// Block until this process is asked to exit: either a successful upgrade
+	// handed serving off to a new process, or a termination signal arrived.
+	<-upg.Exit()
+
+	// Stop accepting new connections and stop background DB writers. Existing
+	// proxied streams keep running on their own goroutines.
+	for _, ln := range listeners {
+		_ = ln.Close()
+	}
+	stopBackground()
+
+	timeout := *drainTimeout
+	if terminating.Load() {
+		timeout = shutdownGrace
+		log.Printf("shutdown: draining in-flight connections (grace %s)", timeout)
+	} else {
+		log.Printf("upgrade: draining in-flight connections (timeout %s)", timeout)
+	}
+	drainConnections(&connWG, timeout)
+	if err := st.Close(); err != nil {
+		log.Printf("shutdown: close store: %v", err)
+	}
+}
+
+// drainConnections waits for in-flight connections to finish, bounded by
+// timeout (0 waits indefinitely). It lets a process that has handed off keep
+// serving live IMAP and SMTP sessions instead of dropping them on restart.
+func drainConnections(connWG *sync.WaitGroup, timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		connWG.Wait()
+		close(done)
+	}()
+	if timeout <= 0 {
+		<-done
+		log.Printf("all connections drained")
+		return
+	}
+	select {
+	case <-done:
+		log.Printf("all connections drained")
+	case <-time.After(timeout):
+		log.Printf("drain timeout after %s; exiting with connections still open", timeout)
 	}
 }
 
@@ -200,15 +329,15 @@ func (r *routeFlag) Set(v string) error {
 	return nil
 }
 
-func listenAndProxy(listen, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, sem *semaphore.Semaphore, allow ipAllowlist) {
-	ln, err := net.Listen("tcp", listen)
-	if err != nil {
-		log.Fatalf("listen %s: %v", listen, err)
-	}
-	log.Printf("listening on %s -> %s", listen, backend)
+func serveListener(ln net.Listener, rt route, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, sem *semaphore.Semaphore, allow ipAllowlist, connWG *sync.WaitGroup) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			// The listener is closed during drain; stop the accept loop so the
+			// process can exit rather than spinning on a permanent error.
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			log.Printf("accept: %v", err)
 			continue
 		}
@@ -216,13 +345,17 @@ func listenAndProxy(listen, backend string, port int, st *store.Store, blockUnkn
 		// backend socket on this one.
 		if !sem.Acquire() {
 			clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-			log.Printf("[%s:%d] OVERLOAD at capacity, dropping connection", clientIP, port)
+			log.Printf("[%s:%d] OVERLOAD at capacity, dropping connection", clientIP, rt.port)
 			conn.Close()
 			continue
 		}
+		// Counted before the goroutine starts, so a connection accepted just
+		// as the drain begins is still waited for.
+		connWG.Add(1)
 		go func() {
+			defer connWG.Done()
 			defer sem.Release()
-			handleConn(conn, backend, port, st, blockUnknown, method, alerter, limiter, allow)
+			handleConn(conn, rt.backend, rt.port, st, blockUnknown, method, alerter, limiter, allow)
 		}()
 	}
 }

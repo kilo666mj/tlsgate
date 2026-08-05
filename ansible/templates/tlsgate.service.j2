@@ -3,7 +3,13 @@ Description=tlsgate TLS Fingerprint Proxy
 After=network.target
 
 [Service]
-Type=simple
+# Type=notify + NotifyAccess=all so a zero-downtime upgrade works: after a
+# tableflip handoff the process that ends up serving is a child of the original
+# main PID, and it reports its own PID so systemd tracks the new process.
+# NotifyAccess=all is required because that notification arrives from a process
+# systemd does not yet consider the main one.
+Type=notify
+NotifyAccess=all
 User=tlsgate
 Group=tlsgate
 {# routes: list of {listen, backend}. Falls back to the mail defaults so
@@ -17,8 +23,18 @@ ExecStart=/usr/local/bin/tlsgate serve \
   --fingerprint {{ fingerprint | default('ja3') }} \
   {% if reset_fingerprints | default(false) | bool %}--reset-fingerprints {% endif %}{% if allow_unknown | default(false) | bool %}--allow-unknown{% endif %}
 
+# SIGHUP starts a graceful upgrade: tableflip re-execs the newly installed
+# binary and hands it the listening sockets, and this process keeps serving its
+# existing connections until they drain. Without it, deploying tlsgate drops
+# live IMAP and SMTP sessions on the mail host.
+ExecReload=/bin/kill -HUP $MAINPID
+
 Restart=on-failure
 RestartSec=5
+
+# A departing process may hold long-lived mail sessions for up to
+# --drain-timeout. systemd must not SIGKILL it out from under them on stop.
+TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 
