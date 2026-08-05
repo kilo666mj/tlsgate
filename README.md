@@ -96,6 +96,34 @@ To use JA4 instead of JA3, set `fingerprint=ja4` in `ansible/inventory` (default
 also pass `--reset-fingerprints` (purges stored fingerprints); re-approve
 clients after.
 
+### Graceful upgrades
+
+tlsgate sits in front of IMAPS and SMTPS on the mail host, so a hard restart
+drops live mail sessions mid-transfer — a poor trade for updating a noise
+filter. Deploys therefore hand off rather than restart, using
+[tableflip](https://github.com/cloudflare/tableflip).
+
+On `SIGHUP` the running process re-execs the newly installed binary and passes
+it the listening sockets over an inherited control fd. The new process starts
+serving immediately; **the old one keeps running its existing connections until
+they finish**, up to `--drain-timeout` (default 1 hour). No connection is
+refused in the gap, because the socket is inherited rather than rebound.
+
+The hour matters: an IMAP IDLE session legitimately sits quiet for half an hour,
+and a short drain would kill exactly the sessions this is meant to protect. A
+`SIGTERM`/`SIGINT` stop is different — that drains for 10 seconds and exits,
+since the operator asked for it to stop.
+
+The unit is `Type=notify` with `NotifyAccess=all`, because after a handoff the
+serving process is a child of the original main PID and has to tell systemd to
+track it. The playbook uses `systemctl reload-or-restart`, which reloads a
+running service and falls back to a start on first deploy.
+
+> **First deploy of a tableflip build must be a hard restart.** A pre-tableflip
+> tlsgate treats `SIGHUP` as a clean stop and never comes back — reloading one
+> is how a deploy takes mail *down* instead of keeping it up. Confirm every host
+> is running a tableflip build before relying on the graceful path.
+
 ## Docker
 
 Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR:
