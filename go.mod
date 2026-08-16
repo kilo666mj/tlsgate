@@ -3,13 +3,13 @@ module tlsgate
 go 1.26.5
 
 require (
-	github.com/cloudflare/tableflip v1.2.3
 	github.com/containrrr/shoutrrr v0.8.0
-	github.com/kilo666mj/gatekit v0.2.0
+	github.com/kilo666mj/gatekit v0.3.0
 	modernc.org/sqlite v1.56.0
 )
 
 require (
+	github.com/cloudflare/tableflip v1.2.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

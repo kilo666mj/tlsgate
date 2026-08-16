@@ -8,12 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/kilo666mj/gatekit/ratelimit"
-	"github.com/kilo666mj/gatekit/semaphore"
 	"github.com/kilo666mj/gatekit/store"
 )
 
@@ -382,74 +380,5 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 	}
 	if !bytes.HasPrefix(fromClientAll, hello) {
 		t.Fatalf("backend did not receive ClientHello first; got %x", fromClientAll)
-	}
-}
-
-// The drain path is what makes a deploy stop interrupting mail, so the two
-// properties it rests on are worth pinning: the accept loop has to exit when
-// its listener closes, and a connection accepted just before the drain has to
-// still be waited for.
-
-func TestServeListenerExitsWhenListenerCloses(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	st := newTestStore(t)
-	var connWG sync.WaitGroup
-
-	returned := make(chan struct{})
-	go func() {
-		serveListener(ln, route{listen: ln.Addr().String(), backend: "127.0.0.1:1", port: 0},
-			st, true, MethodJA3, nil,
-			ratelimit.New(connRatePerIP, connBurstPerIP, rateLimitTTL),
-			semaphore.New(maxConcurrentConns), ipAllowlist{}, &connWG)
-		close(returned)
-	}()
-
-	ln.Close()
-	select {
-	case <-returned:
-	case <-time.After(5 * time.Second):
-		// Spinning on a permanently failing Accept would keep the departing
-		// process burning a core until its drain timeout expired.
-		t.Fatal("serveListener kept accepting after its listener closed")
-	}
-}
-
-func TestDrainWaitsForInFlightConnections(t *testing.T) {
-	var connWG sync.WaitGroup
-	connWG.Add(1)
-
-	drained := make(chan struct{})
-	go func() {
-		drainConnections(&connWG, 5*time.Second)
-		close(drained)
-	}()
-
-	select {
-	case <-drained:
-		t.Fatal("drain returned while a connection was still in flight")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	connWG.Done()
-	select {
-	case <-drained:
-	case <-time.After(5 * time.Second):
-		t.Fatal("drain did not return once the connection finished")
-	}
-}
-
-// A session that never ends must not hold the departing process forever.
-func TestDrainGivesUpAtTheTimeout(t *testing.T) {
-	var connWG sync.WaitGroup
-	connWG.Add(1)
-	defer connWG.Done()
-
-	start := time.Now()
-	drainConnections(&connWG, 150*time.Millisecond)
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("drain took %s; the timeout was not applied", elapsed)
 	}
 }

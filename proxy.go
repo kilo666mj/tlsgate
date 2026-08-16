@@ -2,27 +2,21 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"syscall"
 	"time"
 
-	"github.com/cloudflare/tableflip"
-
 	"github.com/kilo666mj/gatekit/controlplane"
+	"github.com/kilo666mj/gatekit/lifecycle"
+	gateproxy "github.com/kilo666mj/gatekit/proxy"
 	"github.com/kilo666mj/gatekit/ratelimit"
-	"github.com/kilo666mj/gatekit/semaphore"
+	"github.com/kilo666mj/gatekit/sdnotify"
 	"github.com/kilo666mj/gatekit/store"
 )
 
@@ -81,7 +75,7 @@ const (
 
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	var routes routeFlag
+	var routes gateproxy.Routes
 	fs.Var(&routes, "route", "LISTEN=BACKEND route to proxy, repeatable (e.g. [::]:993=127.0.0.1:10993)")
 	dbPath := fs.String("db", defaultDB, "fingerprint database path")
 	configPath := fs.String("config", defaultConfig, "JSON config path for alerting")
@@ -105,34 +99,11 @@ func cmdServe(args []string) {
 	// tlsgate fronts IMAPS and SMTPS on the mail host, so a hard restart drops
 	// live mail sessions mid-transfer. That is a deploy interrupting mail,
 	// which is a poor trade for updating a noise filter.
-	upg, err := tableflip.New(tableflip.Options{})
+	process, err := lifecycle.New(log.Printf)
 	if err != nil {
-		log.Fatalf("tableflip init: %v", err)
+		log.Fatalf("process lifecycle: %v", err)
 	}
-	defer upg.Stop()
-
-	// terminating distinguishes a stop (SIGTERM/SIGINT) from an upgrade
-	// handoff once upg.Exit() unblocks, so each can pick the right drain
-	// deadline: a handoff can afford to wait for a long IMAP IDLE, a shutdown
-	// cannot.
-	var terminating atomic.Bool
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
-		for s := range sig {
-			if s == syscall.SIGHUP {
-				log.Printf("SIGHUP: starting upgrade")
-				if err := upg.Upgrade(); err != nil {
-					log.Printf("upgrade failed: %v", err)
-				}
-				continue
-			}
-			log.Printf("%s: shutting down", s)
-			terminating.Store(true)
-			upg.Stop()
-			return
-		}
-	}()
+	defer process.Close()
 
 	// bgCtx stops background writers (pruning, control-plane sync) once this
 	// process is draining, so a departing process stops touching the shared
@@ -225,35 +196,36 @@ func cmdServe(args []string) {
 
 	// One semaphore shared across all listeners so the cap is a global
 	// ceiling on concurrent connections, not per-port.
-	sem := semaphore.New(maxConcurrentConns)
-
 	log.Printf("fingerprint method: %s", method)
 	blockUnknown := !*allowUnknown
 
-	// connWG tracks in-flight connections so the drain phase can wait for them.
-	var connWG sync.WaitGroup
+	proxyServer := gateproxy.NewServer(maxConcurrentConns, log.Printf)
 	var listeners []net.Listener
 	for _, rt := range routes {
 		// upg.Listen rather than net.Listen: on an upgrade the socket is
 		// inherited from the departing process rather than rebound, so no
 		// connection is refused in the gap between the two.
-		ln, err := upg.Listen("tcp", rt.listen)
+		ln, err := process.Listen("tcp", rt.Listen)
 		if err != nil {
-			log.Fatalf("listen %s: %v", rt.listen, err)
+			log.Fatalf("listen %s: %v", rt.Listen, err)
 		}
 		listeners = append(listeners, ln)
-		log.Printf("listening on %s -> %s", rt.listen, rt.backend)
-		go serveListener(ln, rt, st, blockUnknown, method, alerter, limiter, sem, allow, &connWG)
+		log.Printf("listening on %s -> %s", rt.Listen, rt.Backend)
+		proxyServer.Serve(ln, rt, func(conn net.Conn, route gateproxy.Route) {
+			handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow)
+		})
 	}
 
-	if err := upg.Ready(); err != nil {
+	if err := process.Ready(); err != nil {
 		log.Fatalf("tableflip ready: %v", err)
 	}
-	notifyReady()
+	if err := sdnotify.Ready(); err != nil {
+		log.Printf("sd_notify: %v", err)
+	}
 
 	// Block until this process is asked to exit: either a successful upgrade
 	// handed serving off to a new process, or a termination signal arrived.
-	<-upg.Exit()
+	process.Wait()
 
 	// Stop accepting new connections and stop background DB writers. Existing
 	// proxied streams keep running on their own goroutines.
@@ -263,100 +235,19 @@ func cmdServe(args []string) {
 	stopBackground()
 
 	timeout := *drainTimeout
-	if terminating.Load() {
+	if process.Terminating() {
 		timeout = shutdownGrace
 		log.Printf("shutdown: draining in-flight connections (grace %s)", timeout)
 	} else {
 		log.Printf("upgrade: draining in-flight connections (timeout %s)", timeout)
 	}
-	drainConnections(&connWG, timeout)
-	if err := st.Close(); err != nil {
-		log.Printf("shutdown: close store: %v", err)
-	}
-}
-
-// drainConnections waits for in-flight connections to finish, bounded by
-// timeout (0 waits indefinitely). It lets a process that has handed off keep
-// serving live IMAP and SMTP sessions instead of dropping them on restart.
-func drainConnections(connWG *sync.WaitGroup, timeout time.Duration) {
-	done := make(chan struct{})
-	go func() {
-		connWG.Wait()
-		close(done)
-	}()
-	if timeout <= 0 {
-		<-done
+	if proxyServer.Drain(timeout) {
 		log.Printf("all connections drained")
-		return
-	}
-	select {
-	case <-done:
-		log.Printf("all connections drained")
-	case <-time.After(timeout):
+	} else {
 		log.Printf("drain timeout after %s; exiting with connections still open", timeout)
 	}
-}
-
-// route is a single LISTEN=BACKEND mapping. port is parsed from the listen
-// address for log labels and the stored port set; 0 if it cannot be parsed.
-type route struct {
-	listen  string
-	backend string
-	port    int
-}
-
-// routeFlag collects repeated --route flags.
-type routeFlag []route
-
-func (r *routeFlag) String() string {
-	parts := make([]string, len(*r))
-	for i, rt := range *r {
-		parts[i] = rt.listen + "=" + rt.backend
-	}
-	return strings.Join(parts, ",")
-}
-
-func (r *routeFlag) Set(v string) error {
-	listen, backend, ok := strings.Cut(v, "=")
-	if !ok || listen == "" || backend == "" {
-		return fmt.Errorf("route must be LISTEN=BACKEND, got %q", v)
-	}
-	port := 0
-	if _, portStr, err := net.SplitHostPort(listen); err == nil {
-		port, _ = strconv.Atoi(portStr)
-	}
-	*r = append(*r, route{listen: listen, backend: backend, port: port})
-	return nil
-}
-
-func serveListener(ln net.Listener, rt route, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, sem *semaphore.Semaphore, allow ipAllowlist, connWG *sync.WaitGroup) {
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			// The listener is closed during drain; stop the accept loop so the
-			// process can exit rather than spinning on a permanent error.
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			log.Printf("accept: %v", err)
-			continue
-		}
-		// Cap total in-flight connections before spending a goroutine or
-		// backend socket on this one.
-		if !sem.Acquire() {
-			clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-			log.Printf("[%s:%d] OVERLOAD at capacity, dropping connection", clientIP, rt.port)
-			conn.Close()
-			continue
-		}
-		// Counted before the goroutine starts, so a connection accepted just
-		// as the drain begins is still waited for.
-		connWG.Add(1)
-		go func() {
-			defer connWG.Done()
-			defer sem.Release()
-			handleConn(conn, rt.backend, rt.port, st, blockUnknown, method, alerter, limiter, allow)
-		}()
+	if err := st.Close(); err != nil {
+		log.Printf("shutdown: close store: %v", err)
 	}
 }
 
