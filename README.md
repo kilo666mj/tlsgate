@@ -177,6 +177,26 @@ docker run --rm \
     --route [::]:465=127.0.0.1:10465
 ```
 
+### Preserving client addresses with PROXY protocol
+
+For a backend such as nginx that supports PROXY protocol, pass
+`--proxy-protocol v2`. tlsgate then writes a binary PROXY v2 header before the
+original, byte-identical TLS stream so the backend can recover the client's
+address. The option applies to every configured route and is disabled by
+default; do not enable it until every backend listener expects PROXY protocol.
+
+For nginx, the corresponding listener and real-IP configuration is typically:
+
+```nginx
+listen 8443 ssl proxy_protocol;
+set_real_ip_from 127.0.0.1;
+real_ip_header proxy_protocol;
+```
+
+Keep the backend listener private and restrict `set_real_ip_from` to the
+tlsgate address. A backend that does not expect the header will interpret it as
+invalid TLS and reject the connection.
+
 ## Managing fingerprints
 
 ```bash
