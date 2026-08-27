@@ -17,12 +17,15 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
 	-trimpath \
 	-ldflags="-s -w -extldflags '-static' -X main.version=${VERSION}" \
 	-o /out/tlsgate .
+RUN mkdir -p /data
 
 FROM scratch
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /out/tlsgate /tlsgate
+COPY --from=build --chown=65532:65532 /data /var/lib/tlsgate
 
+USER 65532:65532
 VOLUME ["/var/lib/tlsgate"]
 
 ENTRYPOINT ["/tlsgate"]

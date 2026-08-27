@@ -2,6 +2,8 @@
 #
 # Migrate tlsgate on this host from the local binary + systemd unit to a
 # Docker Compose deployment under /opt/tlsgate, preserving the approval DB.
+# This is a site-specific mailcow migration example, not the general install
+# path. Review every route, service, filesystem, and SELinux assumption first.
 #
 # Run on the mx host as root:
 #   sudo ./migrate-to-docker.sh
@@ -18,6 +20,7 @@ FINGERPRINT="${FINGERPRINT:-ja3}"   # keep ja3 so the migrated approvals stay va
 ROUTE_IMAP="${ROUTE_IMAP:-[::]:993=127.0.0.1:10993}"
 ROUTE_SMTP="${ROUTE_SMTP:-[::]:465=127.0.0.1:10465}"
 ASSUME_YES="${ASSUME_YES:-0}"       # set to 1 to skip the disable-old-service prompt
+DRY_RUN="${DRY_RUN:-0}"
 
 DATA="$BASE/data"
 
@@ -25,7 +28,31 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || die "run as root (sudo $0)"
+usage() {
+	cat <<EOF
+usage: $0 [--dry-run] [--yes]
+
+Site-specific migration from a tlsgate/mail-fingerprint systemd service to
+Docker Compose. Configure IMAGE, BASE, FINGERPRINT, ROUTE_IMAP, and ROUTE_SMTP
+with environment variables.
+
+  --dry-run  Detect existing state and print the migration plan without changes.
+  --yes      Disable the old service without an interactive confirmation.
+  -h, --help Show this help.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--dry-run) DRY_RUN=1 ;;
+		--yes) ASSUME_YES=1 ;;
+		-h|--help) usage; exit 0 ;;
+		*) die "unknown option: $1" ;;
+	esac
+	shift
+done
+
+[ "$DRY_RUN" = "1" ] || [ "$(id -u)" -eq 0 ] || die "run as root (sudo $0)"
 command -v docker >/dev/null              || die "docker not installed"
 docker compose version >/dev/null 2>&1    || die "docker compose plugin not available"
 
@@ -38,15 +65,40 @@ for svc in tlsgate mail-fingerprint; do
 		break
 	fi
 done
-[ -n "$OLD_SVC" ] && log "found existing service: $OLD_SVC.service" \
-	|| warn "no existing tlsgate/mail-fingerprint service found; continuing (fresh install)"
+if [ -n "$OLD_SVC" ]; then
+	log "found existing service: $OLD_SVC.service"
+else
+	warn "no existing tlsgate/mail-fingerprint service found; continuing (fresh install)"
+fi
 
 OLD_DATA=""
 for d in /var/lib/tlsgate /var/lib/mail-fingerprint; do
 	if [ -f "$d/db.sqlite" ]; then OLD_DATA="$d"; break; fi
 done
-[ -n "$OLD_DATA" ] && log "found existing data: $OLD_DATA" \
-	|| warn "no existing db.sqlite found; the new instance will start empty"
+if [ -n "$OLD_DATA" ]; then
+	log "found existing data: $OLD_DATA"
+else
+	warn "no existing db.sqlite found; the new instance will start empty"
+fi
+
+if [ "$DRY_RUN" = "1" ]; then
+	cat <<EOF
+
+Dry-run plan (no changes made):
+  image:              $IMAGE
+  compose directory:  $BASE
+  fingerprint method: $FINGERPRINT
+  IMAP route:         $ROUTE_IMAP
+  SMTP route:         $ROUTE_SMTP
+  old service:        ${OLD_SVC:-none}
+  old data:           ${OLD_DATA:-none}
+
+Would create the Compose deployment, pull the image, stop the detected service,
+copy its SQLite database/config when present, chown data to 65532:65532, start
+the container, and ask before disabling the old unit.
+EOF
+	exit 0
+fi
 
 # --- 2. write the compose file ----------------------------------------------
 log "creating $BASE"
@@ -68,7 +120,7 @@ services:
     volumes:
       # :Z relabels the bind mount for SELinux (container_file_t). Harmless on
       # hosts without SELinux. Required on RHEL/Fedora-family hosts or the
-      # container cannot read its data even as root.
+      # container cannot read its data without a matching SELinux label.
       - ./data:/var/lib/tlsgate:Z
     read_only: true
     tmpfs: ["/tmp"]
@@ -98,11 +150,10 @@ if [ -n "$OLD_DATA" ]; then
 	fi
 fi
 
-# The container runs as root with all capabilities dropped, so it does NOT have
-# CAP_DAC_OVERRIDE and must actually own its files. The migrated DB/config are
-# still owned by the old system user, so hand them to root (uid 0).
-log "setting ownership of $DATA to root (container runtime uid)"
-chown -R 0:0 "$DATA"
+# The image runs as the unprivileged uid/gid 65532. The migrated DB/config are
+# still owned by the old system user, so hand them to the container identity.
+log "setting ownership of $DATA to uid/gid 65532 (container runtime identity)"
+chown -R 65532:65532 "$DATA"
 
 # --- 5. start the container -------------------------------------------------
 log "starting tlsgate container"

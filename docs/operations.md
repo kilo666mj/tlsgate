@@ -74,6 +74,10 @@ instead. If tlsgate is not already running, a one-off `docker run` works too,
 but it must mount the exact same database volume or host path used by the
 service.
 
+Labels are operator notes, not identities. JA3 and JA4 describe a client
+implementation and algorithm set; multiple devices can share a fingerprint and
+an attacker can copy one.
+
 ## Blocked range alerts
 
 `serve` reads optional alert configuration from
@@ -97,7 +101,8 @@ notification_urls:
   - "mattermost://tlsgate@matter2.example/secondary/logw"
 notification_mode: failover
 
-# Cap stored fingerprints (0 = unlimited). Approved entries are never evicted.
+# Cap stored fingerprints (0/omitted = 100000; -1 = unlimited).
+# Approved entries are never evicted.
 max_fingerprints: 100000
 
 # Source CIDRs that bypass the fingerprint gate (always forwarded, never
@@ -148,6 +153,37 @@ to every URL and treat any failed destination as a failed delivery.
     }
   ]
 }
+```
+
+Configuration fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `notification_urls` | With alert ranges | Shoutrrr destinations; cleartext transports are rejected. |
+| `notification_mode` | No | `failover` (default) or `broadcast`. |
+| `max_fingerprints` | No | `0` or omitted uses 100000; `-1` explicitly allows unlimited storage. |
+| `approve_ranges` | No | Source CIDRs that bypass fingerprint gating for that connection. |
+| `alert_ranges` | No | Named CIDR groups whose blocked connections trigger alerts. |
+| `control_plane.url` | Enables sync | Gatehub base URL. |
+| `control_plane.instance_id` | With URL | Stable name for this TLSGate instance. |
+| `control_plane.token` | One auth method | Bearer token for Gatehub. |
+| `control_plane.client_cert` | For mTLS | Client certificate path. |
+| `control_plane.client_key` | For mTLS | Client private-key path. |
+| `control_plane.ca` | For mTLS | CA bundle used to verify Gatehub. |
+| `control_plane.server_name` | No | TLS name override when URL host and certificate differ. |
+| `control_plane.sync_interval` | No | Go duration such as `30s`; defaults to 30 seconds. |
+
+Use `doctor` with the same flags as the service to validate configuration,
+routes, fingerprint method, and PROXY mode without opening the SQLite store,
+connecting to a backend, sending alerts, or binding a port:
+
+```bash
+tlsgate doctor \
+  --db /var/lib/tlsgate/db.sqlite \
+  --config /var/lib/tlsgate/config.json \
+  --route '[::]:993=127.0.0.1:10993' \
+  --fingerprint ja4 \
+  --proxy-protocol off
 ```
 
 ## Gatehub sync
@@ -214,14 +250,33 @@ Every parseable ClientHello from an unknown client is recorded, including
 blocked ones. The per-IP rate limit slows a single source, but many addresses
 (e.g. a wide IPv6 range) can still grow the SQLite database over time.
 
-Set `max_fingerprints` in the config to cap how many entries are kept (0, the
-default, means unlimited). When the store exceeds the cap, the oldest
+The store is capped at 100000 entries when `max_fingerprints` is omitted or
+set to `0`. Set a smaller positive value for a tighter cap or `-1` to explicitly
+allow unlimited storage. When the store exceeds the cap, the oldest
 **non-approved** entries are pruned first — at startup and once a minute.
 **Approved fingerprints are never evicted**, so the allow-list is unaffected;
 if approved entries alone exceed the cap, the store is allowed to stay above it
 rather than drop a real client. Pick a cap comfortably above your number of
 real clients (which is small) so legitimate pending entries survive long enough
 to be reviewed.
+
+## Troubleshooting
+
+- **Permission denied opening SQLite:** the runtime identity needs write access
+  to the database directory, not just the database file. Containers run as
+  UID/GID 65532.
+- **`bind: permission denied`:** ports below 1024 require
+  `CAP_NET_BIND_SERVICE`; use a high port such as 1993 for initial testing.
+- **Backend connection refused:** verify the backend from TLSGate's network
+  namespace. Under bridge networking, `127.0.0.1` is the container itself.
+- **A client connects only during enrollment:** inspect `tlsgate list -v` and
+  approve the intended fingerprint before removing `--allow-unknown`.
+- **Fingerprint method mismatch:** the database records JA3 or JA4. Switching
+  requires an explicit reset and complete re-enrollment; do not reset casually.
+- **TLS fails immediately with PROXY v2 enabled:** every backend listener must
+  be configured to expect PROXY v2 before TLS bytes.
+- **The service is running but unreachable:** check listeners and firewall,
+  then inspect `journalctl -u tlsgate -f` or `docker compose logs -f`.
 
 ## Logs
 
@@ -274,8 +329,7 @@ metadata keeps them visible for inspection.
 
 ## Setup workflow
 
-1. Set `allow_unknown=true` in inventory and deploy
+1. Set `allow_unknown: true` in `ansible/group_vars/tlsgate.yml` and deploy
 2. Connect from all your devices (phone, laptop, etc.)
 3. Run `tlsgate list` and approve each one
-4. Remove `allow_unknown=true` from inventory and re-deploy
-
+4. Set `allow_unknown: false` and re-deploy

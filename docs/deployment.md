@@ -2,20 +2,29 @@
 
 Ansible, graceful upgrades, Docker, and PROXY protocol deployment guidance.
 
+Static Linux binaries are available from the
+[GitHub releases page](https://github.com/kilo666mj/tlsgate/releases). Building
+from source or with Ansible requires Go 1.26.5 or newer.
+
 ## Deploy
 
 ```bash
 cd ansible
+cp inventory.example inventory
+cp group_vars/tlsgate.example.yml group_vars/tlsgate.yml
+# Edit both files for your host, routes, and policy.
+ansible-playbook --syntax-check playbook.yml
 ansible-playbook playbook.yml --ask-become-pass
 ```
 
-To temporarily allow unknown fingerprints (e.g. during initial setup), set
-`allow_unknown=true` in `ansible/inventory` and re-run.
+The real inventory and group variables are ignored; only sanitized examples are
+committed. To temporarily allow unknown fingerprints during initial setup, set
+`allow_unknown: true` in `group_vars/tlsgate.yml` and re-run.
 
-To use JA4 instead of JA3, set `fingerprint=ja4` in `ansible/inventory` (default
-`ja3`). Switching the method on an existing database refuses to start until you
-also pass `--reset-fingerprints` (purges stored fingerprints); re-approve
-clients after.
+To use JA4 instead of JA3, set `fingerprint: ja4` in the group variables.
+Switching the method on an existing database refuses to start until you also set
+`reset_fingerprints: true` for one deployment. This purges stored fingerprints;
+set it back to false and re-approve clients afterward.
 
 ### Graceful upgrades
 
@@ -77,14 +86,21 @@ Run it with persistent state mounted at the default database/config directory:
 
 ```bash
 docker run --rm \
-  -p 993:993 \
-  -p 465:465 \
+  --network host \
+  --cap-drop ALL \
+  --cap-add NET_BIND_SERVICE \
+  --security-opt no-new-privileges \
   -v tlsgate-data:/var/lib/tlsgate \
-  tlsgate serve \
-    --route [::]:993=127.0.0.1:10993 \
-    --route [::]:465=127.0.0.1:10465 \
+  ghcr.io/kilo666mj/tlsgate:latest serve \
+    --route '[::]:993=127.0.0.1:10993' \
+    --route '[::]:465=127.0.0.1:10465' \
     --allow-unknown
 ```
+
+The published image runs as UID/GID 65532. Named volumes initialize with the
+correct ownership. For a host bind mount, create the directory and run
+`chown 65532:65532 <directory>`; add `:Z` on SELinux hosts. The capability is
+needed only for listener ports below 1024.
 
 Each `--route LISTEN=BACKEND` adds a proxied port; repeat it for as many
 services as you need (host or container-network backend addresses):
@@ -93,10 +109,14 @@ services as you need (host or container-network backend addresses):
 docker run --rm \
   --network host \
   -v tlsgate-data:/var/lib/tlsgate \
-  tlsgate serve \
-    --route [::]:993=127.0.0.1:10993 \
-    --route [::]:465=127.0.0.1:10465
+  ghcr.io/kilo666mj/tlsgate:latest serve \
+    --route '[::]:1993=127.0.0.1:10993'
 ```
+
+This high-port form needs no bind capability and is suitable for enrollment
+testing. With bridge networking, `127.0.0.1` is the container itself; use a
+backend address reachable from that network (and expect Docker NAT to obscure
+the original client address).
 
 ### Preserving client addresses with PROXY protocol
 
@@ -117,3 +137,18 @@ real_ip_header proxy_protocol;
 Keep the backend listener private and restrict `set_real_ip_from` to the
 tlsgate address. A backend that does not expect the header will interpret it as
 invalid TLS and reject the connection.
+
+## Site-specific systemd-to-Docker migration
+
+`migrate-to-docker.sh` is an example for the original mailcow deployment. It
+assumes particular service names, database paths, ports, host networking, and
+SELinux behavior. Inspect the plan without changing the host:
+
+```bash
+./migrate-to-docker.sh --dry-run
+```
+
+Override `IMAGE`, `BASE`, `FINGERPRINT`, `ROUTE_IMAP`, and `ROUTE_SMTP` as
+needed. A real run stops the detected service briefly to copy a clean SQLite
+database. Keep a recovery session open and verify a real client before agreeing
+to disable the old unit.
