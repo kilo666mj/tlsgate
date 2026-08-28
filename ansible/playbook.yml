@@ -2,6 +2,7 @@
 - name: Deploy tlsgate proxy
   hosts: tlsgate
   become: true
+  serial: 1
 
   vars:
     goarch_map:
@@ -13,6 +14,43 @@
     tlsgate_config: "{{ tlsgate_config_dir }}/config.json"
 
   tasks:
+    - name: Ensure local token directory exists
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/secrets"
+        state: directory
+        mode: "0700"
+
+    - name: Register TLSGate node in Gatehub
+      delegate_to: gatehub-control
+      become: true
+      no_log: true
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/gatehub
+          - register-node
+          - --db
+          - /var/lib/gatehub/gatehub.sqlite
+          - --id
+          - "{{ control_plane.instance_id }}"
+          - --kind
+          - tlsgate
+          - --host
+          - "{{ tlsgate_node_host }}"
+          - --allowed-cert-name
+          - "{{ tlsgate_node_host }}"
+          - --token-file
+          - "-"
+        stdin: "{{ control_plane.token }}"
+      when:
+        - control_plane is defined
+        - control_plane.url | default('') | length > 0
+        - control_plane.token | default('') | length > 0
+        - tlsgate_node_host is defined
+      changed_when: true
+
     # Describe the checkout so a deployed host reports what it is actually
     # running. Without this the binary keeps main.version's "dev" default, and
     # `tlsgate version` on the target tells you nothing about which build it has.
@@ -39,6 +77,8 @@
         CGO_ENABLED: "0"
         GOOS: linux
         GOARCH: "{{ goarch }}"
+        GOCACHE: /tmp/tlsgate-go-cache
+        GOMODCACHE: /tmp/tlsgate-go-mod-cache
       vars:
         tlsgate_version: "{{ tlsgate_git_describe.stdout | default('dev', true) | trim }}"
       changed_when: true
@@ -130,7 +170,7 @@
     # running a tableflip build, this is safe.
     - name: Restart tlsgate
       ansible.builtin.command:
-        cmd: systemctl reload-or-restart tlsgate
+        cmd: "systemctl {{ 'restart' if hard_restart | default(false) | bool else 'reload-or-restart' }} tlsgate"
       changed_when: true
       async: 45
       poll: 0
