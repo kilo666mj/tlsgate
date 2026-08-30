@@ -21,6 +21,7 @@ ExecStart=/usr/local/bin/tlsgate serve \
   --db /var/lib/tlsgate/db.sqlite \
   --config {{ tlsgate_config | default('/etc/tlsgate/config.json') }} \
   --fingerprint {{ fingerprint | default('ja3') }} \
+  --proxy-protocol {{ proxy_protocol | default('off') }} \
   {% if reset_fingerprints | default(false) | bool %}--reset-fingerprints {% endif %}{% if allow_unknown | default(false) | bool %}--allow-unknown{% endif %}
 
 # SIGHUP starts a graceful upgrade: tableflip re-execs the newly installed

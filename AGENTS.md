@@ -19,7 +19,7 @@ There are no generated assets or frontend files.
 
 ## Build, Test, and Development Commands
 
-Use Go 1.26.3 or newer.
+Use Go 1.26.5 or newer.
 
 ```bash
 go build -o tlsgate .
@@ -35,7 +35,7 @@ go vet ./...
 Runs unit tests and static checks.
 
 ```bash
-tlsgate serve --route [::]:993=127.0.0.1:10993 --db ./db.sqlite --allow-unknown
+tlsgate serve --route [::]:1993=127.0.0.1:10993 --db ./db.sqlite --allow-unknown
 tlsgate list -v --db ./db.sqlite
 tlsgate correlate --db ./db.sqlite --log ./syslog <fingerprint>
 ```

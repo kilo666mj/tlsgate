@@ -82,12 +82,17 @@ func cmdServe(args []string) {
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
 	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when --fingerprint differs from the database's method")
+	proxyProtocol := fs.String("proxy-protocol", "off", "PROXY protocol sent to backends: off or v2")
 	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "on upgrade/shutdown, how long to wait for existing connections to finish (0 = forever)")
 	fs.Parse(args)
 
 	if len(routes) == 0 {
 		log.Fatalf("no routes: pass at least one --route LISTEN=BACKEND")
 	}
+	if *proxyProtocol != "off" && *proxyProtocol != "v2" {
+		log.Fatalf("invalid --proxy-protocol %q (want off or v2)", *proxyProtocol)
+	}
+	sendProxyV2 := *proxyProtocol == "v2"
 
 	log.Printf("tlsgate %s starting", version)
 
@@ -197,6 +202,9 @@ func cmdServe(args []string) {
 	// One semaphore shared across all listeners so the cap is a global
 	// ceiling on concurrent connections, not per-port.
 	log.Printf("fingerprint method: %s", method)
+	if sendProxyV2 {
+		log.Printf("backend PROXY protocol: v2")
+	}
 	blockUnknown := !*allowUnknown
 
 	proxyServer := gateproxy.NewServer(maxConcurrentConns, log.Printf)
@@ -212,7 +220,7 @@ func cmdServe(args []string) {
 		listeners = append(listeners, ln)
 		log.Printf("listening on %s -> %s", rt.Listen, rt.Backend)
 		proxyServer.Serve(ln, rt, func(conn net.Conn, route gateproxy.Route) {
-			handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow)
+			handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow, sendProxyV2)
 		})
 	}
 
@@ -251,7 +259,7 @@ func cmdServe(args []string) {
 	}
 }
 
-func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow ipAllowlist) {
+func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow ipAllowlist, sendProxyV2 bool) {
 	defer client.Close()
 
 	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
@@ -347,6 +355,17 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 		return
 	}
 	defer upstream.Close()
+	if sendProxyV2 {
+		header, err := proxyV2Header(client.RemoteAddr(), client.LocalAddr())
+		if err != nil {
+			log.Printf("[%s:%d] build PROXY v2 header: %v", clientIP, port, err)
+			return
+		}
+		if _, err := upstream.Write(header); err != nil {
+			log.Printf("[%s:%d] write PROXY v2 header: %v", clientIP, port, err)
+			return
+		}
+	}
 
 	if _, err := upstream.Write(peeked); err != nil {
 		return

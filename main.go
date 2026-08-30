@@ -28,6 +28,7 @@ Commands:
   label    Set a label on a fingerprint
   delete   Delete a fingerprint
   reset    Purge all stored fingerprints (e.g. before a ja3/ja4 switch)
+  doctor   Validate and summarize startup settings without changing state
   version  Print the build version
 `
 
@@ -53,6 +54,8 @@ func main() {
 		cmdDelete(os.Args[2:])
 	case "reset":
 		cmdReset(os.Args[2:])
+	case "doctor":
+		cmdDoctor(os.Args[2:])
 	case "version", "--version", "-version":
 		fmt.Printf("tlsgate %s\n", version)
 	default:
