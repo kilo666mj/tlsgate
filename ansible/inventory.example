@@ -1,0 +1,3 @@
+[tlsgate]
+# Replace with the SSH host or address that will run tlsgate.
+myhost ansible_host=server.example.com

@@ -9,7 +9,7 @@
 services:
   tlsgate:
     # Pin to a digest in production, e.g. ghcr.io/kilo666mj/tlsgate@sha256:...
-    image: ghcr.io/kilo666mj/tlsgate:latest@sha256:66713277f6f6fdb0da5b0ffde3d80ee09b5c07743f6c89fb2f398f86e6fc6d06
+    image: ghcr.io/kilo666mj/tlsgate:latest@sha256:9d9b738ccfb0644f09b444332353e8d4d20339dd8a267e0dcd738e7e3a7ae9af
     restart: unless-stopped
     network_mode: host
     command:
@@ -28,10 +28,9 @@ services:
     # proxy does not need. It only binds the privileged listen ports and writes
     # to its data volume.
     #
-    # NET_BIND_SERVICE is still required if the image runs as non-root, because
-    # the routes bind ports below 1024. The data directory must be writable by
-    # the container UID; for a host bind mount, chown it to that UID and add :Z
-    # on SELinux hosts (e.g. ./data:/var/lib/tlsgate:Z).
+    # The image runs as UID 65532. NET_BIND_SERVICE is required because the
+    # routes bind ports below 1024. For a host bind mount, chown the directory
+    # to 65532:65532 and add :Z on SELinux hosts.
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: ["ALL"]

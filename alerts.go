@@ -17,7 +17,10 @@ import (
 	"github.com/kilo666mj/gatekit/store"
 )
 
-const defaultConfig = "/var/lib/tlsgate/config.json"
+const (
+	defaultConfig          = "/var/lib/tlsgate/config.json"
+	defaultMaxFingerprints = 100000
+)
 
 const (
 	alertQueueSize   = 256
@@ -36,7 +39,8 @@ type AppConfig struct {
 	NotificationMode NotificationMode `json:"notification_mode"`
 	// MaxFingerprints caps how many fingerprint entries are kept in the
 	// store, bounding disk growth from unauthenticated unknown clients.
-	// 0 means unlimited. Approved entries are never evicted; the oldest
+	// 0 applies defaultMaxFingerprints; -1 means unlimited. Approved entries
+	// are never evicted; the oldest
 	// non-approved (pending/blocked) entries are pruned first.
 	MaxFingerprints int                `json:"max_fingerprints"`
 	AlertRanges     []AlertRangeConfig `json:"alert_ranges"`
@@ -112,12 +116,12 @@ type blockedRangeAlert struct {
 
 func loadConfig(path string) (AppConfig, error) {
 	if path == "" {
-		return AppConfig{}, nil
+		return AppConfig{MaxFingerprints: defaultMaxFingerprints}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return AppConfig{}, nil
+			return AppConfig{MaxFingerprints: defaultMaxFingerprints}, nil
 		}
 		return AppConfig{}, err
 	}
@@ -125,8 +129,11 @@ func loadConfig(path string) (AppConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return AppConfig{}, err
 	}
-	if cfg.MaxFingerprints < 0 {
-		return AppConfig{}, fmt.Errorf("max_fingerprints must be >= 0, got %d", cfg.MaxFingerprints)
+	if cfg.MaxFingerprints < -1 {
+		return AppConfig{}, fmt.Errorf("max_fingerprints must be >= -1, got %d", cfg.MaxFingerprints)
+	}
+	if cfg.MaxFingerprints == 0 {
+		cfg.MaxFingerprints = defaultMaxFingerprints
 	}
 	if cfg.NotificationMode == "" {
 		cfg.NotificationMode = NotificationModeFailover

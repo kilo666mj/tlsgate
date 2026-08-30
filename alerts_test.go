@@ -35,6 +35,30 @@ func TestLoadConfigAndAlertRangeParsing(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAppliesBoundedDefault(t *testing.T) {
+	cfg, err := loadConfig(filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.MaxFingerprints != defaultMaxFingerprints {
+		t.Fatalf("MaxFingerprints = %d, want %d", cfg.MaxFingerprints, defaultMaxFingerprints)
+	}
+}
+
+func TestLoadConfigAllowsExplicitUnlimitedStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"max_fingerprints":-1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.MaxFingerprints != -1 {
+		t.Fatalf("MaxFingerprints = %d, want -1", cfg.MaxFingerprints)
+	}
+}
+
 func TestIPAllowlistContains(t *testing.T) {
 	allow, err := newIPAllowlist([]string{"192.0.2.0/24", "2001:db8::/32"})
 	if err != nil {

@@ -65,18 +65,21 @@ methods requires an explicit reset and re-enrollment.
 
 ## Quick start
 
-Build and test with Go 1.26.3 or newer:
+Download a static Linux binary from the
+[GitHub releases page](https://github.com/kilo666mj/tlsgate/releases), or build
+and test with Go 1.26.5 or newer:
 
 ```sh
 go build -o tlsgate .
 go test ./...
 ```
 
-Run a local route with a temporary enrollment window:
+Use an unprivileged high port for a temporary enrollment window, leaving the
+real public listener untouched while you test:
 
 ```sh
 ./tlsgate serve \
-  --route [::]:993=127.0.0.1:10993 \
+  --route '[::]:1993=127.0.0.1:10993' \
   --db ./tlsgate.db \
   --fingerprint ja4 \
   --allow-unknown
@@ -91,15 +94,32 @@ After connecting known clients, review and approve their fingerprints:
 
 Remove `--allow-unknown` for normal operation.
 
+Validate the same startup inputs without opening the database, connecting to a
+backend, or binding a port:
+
+```sh
+./tlsgate doctor \
+  --route '[::]:1993=127.0.0.1:10993' \
+  --db ./tlsgate.db \
+  --fingerprint ja4
+```
+
 ## Deployment
 
 The included Ansible playbook is the primary deployment path:
 
 ```sh
 cd ansible
+cp inventory.example inventory
+cp group_vars/tlsgate.example.yml group_vars/tlsgate.yml
+# Edit both local files for your deployment.
 ansible-playbook --syntax-check playbook.yml
 ansible-playbook playbook.yml --ask-become-pass
 ```
+
+The real inventory and group variables are ignored so deployment-specific host
+names, network ranges, fingerprints, and notification credentials are not
+committed accidentally.
 
 The backend must first move from its public port to an internal-only port.
 Deployment changes on an inline proxy need graceful handoff so active

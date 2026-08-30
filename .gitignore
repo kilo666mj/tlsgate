@@ -1,3 +1,5 @@
 tlsgate
+ansible/inventory
 ansible/group_vars/*.yml
 !ansible/group_vars/*.example.yml
+ansible/secrets/

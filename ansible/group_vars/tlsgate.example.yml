@@ -1,0 +1,21 @@
+---
+# Copy to tlsgate.yml and adjust for your deployment. The real file is ignored.
+routes:
+  - listen: "[::]:993"
+    backend: "127.0.0.1:10993"
+  - listen: "[::]:465"
+    backend: "127.0.0.1:10465"
+
+# JA4 is stable across TLS extension reordering. Changing methods later requires
+# reset_fingerprints: true for one deployment and re-enrollment of every client.
+fingerprint: ja4
+reset_fingerprints: false
+proxy_protocol: "off"
+allow_unknown: false
+
+max_fingerprints: 100000
+notification_urls: []
+notification_mode: failover
+approve_ranges: []
+alert_ranges: []
+control_plane: {}
