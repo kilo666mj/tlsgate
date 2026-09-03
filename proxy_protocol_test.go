@@ -86,7 +86,7 @@ func TestHandleConnWritesProxyV2BeforeUntouchedTLS(t *testing.T) {
 	go func() {
 		conn, acceptErr := frontend.Accept()
 		if acceptErr == nil {
-			handleConn(conn, backend.Addr().String(), 443, st, false, MethodJA3, nil, nil, ipAllowlist{}, true)
+			handleConn(conn, backend.Addr().String(), 443, st, false, MethodJA3, nil, nil, &ipAllowlist{}, true)
 		}
 	}()
 

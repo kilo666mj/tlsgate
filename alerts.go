@@ -57,35 +57,58 @@ type AppConfig struct {
 // ipAllowlist holds the parsed ApproveRanges CIDRs and answers whether a
 // source IP falls inside any of them.
 type ipAllowlist struct {
-	prefixes []netip.Prefix
+	mu      sync.RWMutex
+	static  []netip.Prefix
+	dynamic []netip.Prefix
 }
 
-func newIPAllowlist(cidrs []string) (ipAllowlist, error) {
-	var a ipAllowlist
+func newIPAllowlist(cidrs []string) (*ipAllowlist, error) {
+	a := &ipAllowlist{}
 	for _, cidr := range cidrs {
 		prefix, err := netip.ParsePrefix(cidr)
 		if err != nil {
-			return ipAllowlist{}, fmt.Errorf("parse approve_ranges CIDR %q: %w", cidr, err)
+			return nil, fmt.Errorf("parse approve_ranges CIDR %q: %w", cidr, err)
 		}
-		a.prefixes = append(a.prefixes, prefix)
+		a.static = append(a.static, prefix.Masked())
 	}
 	return a, nil
 }
 
-func (a ipAllowlist) contains(ip string) bool {
-	if len(a.prefixes) == 0 {
-		return false
-	}
+func (a *ipAllowlist) contains(ip string) bool {
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		return false
 	}
-	for _, prefix := range a.prefixes {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, prefix := range a.static {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	for _, prefix := range a.dynamic {
 		if prefix.Contains(addr) {
 			return true
 		}
 	}
 	return false
+}
+
+// replaceDynamic atomically swaps ranges supplied by Gatehub while preserving
+// locally configured static bypasses.
+func (a *ipAllowlist) replaceDynamic(cidrs []string) error {
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return fmt.Errorf("parse Gatehub trusted range %q: %w", cidr, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	a.mu.Lock()
+	a.dynamic = prefixes
+	a.mu.Unlock()
+	return nil
 }
 
 type AlertRangeConfig struct {

@@ -210,6 +210,11 @@ set `client_cert`, `client_key`, and `ca` for mTLS auth. The optional
 `server_name` field overrides TLS server-name verification when the URL host
 does not match the server certificate.
 
+Current Gatehub policy responses may also publish expiring `trusted_ranges`.
+TLSGate atomically replaces the dynamic portion of its source allowlist on each
+sync while preserving local `approve_ranges`. If Gatehub omits the field,
+TLSGate preserves its current dynamic set for compatibility with older servers.
+
 ## Trusted source ranges (`approve_ranges`)
 
 `approve_ranges` lists CIDRs whose **source IP** bypasses the fingerprint gate:

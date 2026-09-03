@@ -146,7 +146,7 @@ func TestHandleConnBlocksUnparseableWhenBlockUnknown(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, ipAllowlist{}, false)
+		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 		close(done)
 	}()
 	go testConn.Write(truncatedClientHello)
@@ -165,7 +165,7 @@ func TestHandleConnForwardsUnparseableWhenAllowUnknown(t *testing.T) {
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
-	go handleConn(clientConn, backend, 993, st, false, MethodJA3, nil, nil, ipAllowlist{}, false)
+	go handleConn(clientConn, backend, 993, st, false, MethodJA3, nil, nil, &ipAllowlist{}, false)
 	go testConn.Write(truncatedClientHello)
 
 	select {
@@ -184,7 +184,7 @@ func TestHandleConnBlocksNonTLSWhenBlockUnknown(t *testing.T) {
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
-	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, ipAllowlist{}, false)
+	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 	go testConn.Write([]byte("HELO plain\r\n"))
 
 	expectNoBackend(t, got)
@@ -196,7 +196,7 @@ func TestHandleConnRejectsOversizedRecord(t *testing.T) {
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
 
-	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, ipAllowlist{}, false)
+	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 	// 0x16 record header declaring a 65535-byte body, far above maxTLSRecordBody.
 	go testConn.Write([]byte{0x16, 0x03, 0x01, 0xff, 0xff})
 
@@ -212,7 +212,7 @@ func TestHandleConnDropsRateLimitedConnection(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, limiter, ipAllowlist{}, false)
+		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, limiter, &ipAllowlist{}, false)
 		close(done)
 	}()
 
@@ -348,7 +348,7 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 
 	clientConn, testConn := net.Pipe()
 	defer testConn.Close()
-	go handleConn(clientConn, ln.Addr().String(), 993, st, true, MethodJA3, nil, nil, ipAllowlist{}, false)
+	go handleConn(clientConn, ln.Addr().String(), 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 
 	go func() {
 		testConn.Write(hello)

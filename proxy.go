@@ -163,6 +163,13 @@ func cmdServe(args []string) {
 	if len(cfg.ApproveRanges) > 0 {
 		log.Printf("approve ranges (fingerprint gate bypassed): %s", strings.Join(cfg.ApproveRanges, ", "))
 	}
+	cfg.ControlPlane.ApplyTrustedRanges = func(ranges []string) error {
+		if err := allow.replaceDynamic(ranges); err != nil {
+			return err
+		}
+		log.Printf("gatehub trusted ranges updated: %d range(s)", len(ranges))
+		return nil
+	}
 
 	// Bound store growth from unauthenticated unknown clients: trim back to
 	// the configured cap at startup and on a timer. Approved entries are
@@ -259,7 +266,7 @@ func cmdServe(args []string) {
 	}
 }
 
-func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow ipAllowlist, sendProxyV2 bool) {
+func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow *ipAllowlist, sendProxyV2 bool) {
 	defer client.Close()
 
 	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
