@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -378,28 +379,58 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 		return
 	}
 
-	// Bound idle time on the proxied stream so half-open / slowloris
-	// connections cannot pin goroutines and backend sockets forever.
-	pump := func(dst, src net.Conn) {
+	proxyBidirectional(client, upstream)
+}
+
+type closeWriter interface {
+	CloseWrite() error
+}
+
+// proxyBidirectional copies both halves of a TCP stream. A clean EOF only
+// half-closes the peer connection, allowing its response to drain; a hard I/O
+// error closes both connections so the other pump cannot remain stuck.
+func proxyBidirectional(client, upstream net.Conn) {
+	pump := func(dst, src net.Conn) error {
 		buf := make([]byte, 32*1024)
 		for {
-			src.SetReadDeadline(time.Now().Add(idleTimeout))
+			if err := src.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+				return err
+			}
 			n, rerr := src.Read(buf)
 			if n > 0 {
-				dst.SetWriteDeadline(time.Now().Add(idleTimeout))
-				if _, werr := dst.Write(buf[:n]); werr != nil {
-					return
+				if err := dst.SetWriteDeadline(time.Now().Add(idleTimeout)); err != nil {
+					return err
+				}
+				for written := 0; written < n; {
+					m, werr := dst.Write(buf[written:n])
+					written += m
+					if werr != nil {
+						return werr
+					}
+					if m == 0 {
+						return io.ErrShortWrite
+					}
 				}
 			}
 			if rerr != nil {
-				return
+				if errors.Is(rerr, io.EOF) {
+					if dst, ok := dst.(closeWriter); ok {
+						_ = dst.CloseWrite()
+					}
+					return nil
+				}
+				return rerr
 			}
 		}
 	}
 
-	done := make(chan struct{}, 2)
-	go func() { pump(upstream, client); done <- struct{}{} }()
-	go func() { pump(client, upstream); done <- struct{}{} }()
+	done := make(chan error, 2)
+	go func() { done <- pump(upstream, client) }()
+	go func() { done <- pump(client, upstream) }()
+	if err := <-done; err != nil {
+		_ = client.Close()
+		_ = upstream.Close()
+	}
 	<-done
 }
 

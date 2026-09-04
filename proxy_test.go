@@ -382,3 +382,86 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 		t.Fatalf("backend did not receive ClientHello first; got %x", fromClientAll)
 	}
 }
+
+func tcpConnPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
+	t.Helper()
+	ln, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	accepted := make(chan *net.TCPConn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := ln.AcceptTCP()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+	peer, err := net.DialTCP("tcp4", nil, ln.Addr().(*net.TCPAddr))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	select {
+	case proxy := <-accepted:
+		return proxy, peer
+	case err := <-acceptErr:
+		t.Fatalf("accept: %v", err)
+		return nil, nil
+	}
+}
+
+func TestProxyBidirectionalDrainsAfterHalfClose(t *testing.T) {
+	client, clientPeer := tcpConnPair(t)
+	upstream, upstreamPeer := tcpConnPair(t)
+	for _, conn := range []*net.TCPConn{client, clientPeer, upstream, upstreamPeer} {
+		conn := conn
+		t.Cleanup(func() { _ = conn.Close() })
+		if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatalf("set deadline: %v", err)
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		proxyBidirectional(client, upstream)
+		close(done)
+	}()
+
+	if _, err := clientPeer.Write([]byte("request")); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	if err := clientPeer.CloseWrite(); err != nil {
+		t.Fatalf("half-close client: %v", err)
+	}
+	request, err := io.ReadAll(upstreamPeer)
+	if err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if string(request) != "request" {
+		t.Fatalf("request = %q, want request", request)
+	}
+
+	if _, err := upstreamPeer.Write([]byte("response")); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+	if err := upstreamPeer.CloseWrite(); err != nil {
+		t.Fatalf("half-close upstream: %v", err)
+	}
+	response, err := io.ReadAll(clientPeer)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if string(response) != "response" {
+		t.Fatalf("response = %q, want response", response)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not finish after both directions closed")
+	}
+}
