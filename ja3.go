@@ -277,17 +277,13 @@ func u8str(vals []uint8) string {
 	return strings.Join(parts, "-")
 }
 
-// ja3FromHello builds the JA3 string and its md5 fingerprint from a parsed
-// ClientHello. Per the canonical JA3 spec (Salesforce), GREASE values are NOT
-// stripped — they are part of the fingerprinted byte sequence — so these
-// hashes match external JA3 databases and threat feeds. (JA4, by contrast,
-// deliberately strips GREASE; see computeJA4.)
+// ja3FromHello implements canonical JA3, excluding GREASE values.
 func ja3FromHello(ch *clientHello) (fp string, ja3str string) {
 	ja3str = strings.Join([]string{
 		strconv.Itoa(int(ch.version)),
-		u16str(ch.cipherSuites, false),
-		u16str(ch.extensions, false),
-		u16str(ch.ellipticCurves, false),
+		u16str(ch.cipherSuites, true),
+		u16str(ch.extensions, true),
+		u16str(ch.ellipticCurves, true),
 		u8str(ch.ecPointFormats),
 	}, ",")
 	sum := md5.Sum([]byte(ja3str))

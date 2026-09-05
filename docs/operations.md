@@ -85,7 +85,8 @@ an attacker can copy one.
 `--config <path>`. If `alert_ranges` are configured, a blocked connection from
 a matching CIDR sends a Shoutrrr notification the first time each source IP is
 seen for that range. Alerts are deduplicated in SQLite, so repeated blocked
-attempts from the same IP/range do not spam the channel.
+attempts from the same IP/range do not spam the channel while its record is
+retained. The newest 10,000 pairs are kept; evicted pairs can notify again.
 
 Ansible deploys this config when `alert_ranges` is defined. Prefer the
 router-advertised IPv6 delegated prefix over the narrower `/64` shown on a
@@ -257,13 +258,30 @@ blocked ones. The per-IP rate limit slows a single source, but many addresses
 
 The store is capped at 100000 entries when `max_fingerprints` is omitted or
 set to `0`. Set a smaller positive value for a tighter cap or `-1` to explicitly
-allow unlimited storage. When the store exceeds the cap, the oldest
-**non-approved** entries are pruned first — at startup and once a minute.
+allow unlimited fingerprint rows. When the store exceeds the cap, the oldest
+**non-approved** entries are pruned first — in the transaction recording each
+new fingerprint, at startup, and once a minute. The periodic pass also covers
+rows inserted by control-plane decisions.
 **Approved fingerprints are never evicted**, so the allow-list is unaffected;
 if approved entries alone exceed the cap, the store is allowed to stay above it
 rather than drop a real client. Pick a cap comfortably above your number of
 real clients (which is small) so legitimate pending entries survive long enough
 to be reviewed.
+
+Gatekit v0.5.0 also limits each fingerprint to 128 source IPs, 128 ports, and
+128 recent sightings, and rejects observation metadata larger than 64 KiB.
+Opening an existing database trims excess history and clears oversized metadata;
+verdicts, labels, and total observation counts are preserved. These per-entry
+limits apply even with `max_fingerprints: -1`. Back up the database before an
+upgrade if you need the complete historical data. These limits do not bound
+blocked-range alert deduplication records. TLSGate separately retains at most
+10,000 range/IP pairs, trimming existing excess rows on open and enforcing the
+cap atomically on each successful alert record. The oldest inserted pairs are
+evicted first and may alert again on a later blocked connection. This cap also
+applies when fingerprint storage is unlimited; reset does not clear deduplication.
+
+Control-plane sync uses pages of at most 16 fingerprints and rejects HTTP
+redirects. Configure its final HTTPS endpoint directly.
 
 ## Troubleshooting
 
@@ -292,9 +310,9 @@ journalctl -u tlsgate -f
 Log lines show status per connection:
 
 ```
-PENDING   fp=abc123... ja3=771,4865-4866...
-APPROVED  fp=abc123...
-BLOCKED   fp=def456...
+PENDING   fp="abc123..." ja3="771,4865-4866..."
+APPROVED  fp="abc123..."
+BLOCKED   fp="def456..."
 RATELIMIT dropping connection
 OVERLOAD  at capacity, dropping connection
 ```
@@ -329,8 +347,9 @@ recorded as a fingerprint, so the store is not polluted by partial parses.
 Verbose TLS metadata may show values such as `GREASE(0x6a6a)`. These are
 reserved TLS placeholder values intentionally sent by modern clients to keep
 servers tolerant of unknown TLS codes. They are not unknown protocol versions
-or signature algorithms. JA3 generation skips GREASE values, while verbose
-metadata keeps them visible for inspection.
+or signature algorithms. JA3 excludes GREASE from fingerprint computation while
+verbose metadata retains it. JA4 encodes non-alphanumeric ALPN endpoint bytes
+using its canonical hexadecimal fallback, and logs quote fingerprint fields.
 
 ## Setup workflow
 
@@ -338,3 +357,43 @@ metadata keeps them visible for inspection.
 2. Connect from all your devices (phone, laptop, etc.)
 3. Run `tlsgate list` and approve each one
 4. Set `allow_unknown: false` and re-deploy
+
+
+## Upgrading fingerprint format and SMTP transport
+
+This security update corrects JA3 GREASE handling and JA4 ALPN encoding. Existing
+keys may change, so serving a populated database without the current format
+marker fails with an explicit reset/re-enrollment instruction. No approvals or
+blocks are automatically translated. `approve --register` and `block --register`
+also reject mixing new keys into an older-format database. Listing and managing
+existing entries remain available for review.
+
+For this format transition, stop all serving processes sharing the database
+before backing it up and resetting; do not use a SIGHUP handoff with an older
+binary still writing old-format observations. Keep a copy of decisions for
+manual review, and reconcile any old Gatehub decisions before resuming sync.
+Reset with `tlsgate reset --db PATH --fingerprint ja3` (or `ja4`), then start the
+new binary using the same method and re-enroll/review clients. Alternatively,
+`serve --reset-fingerprints` explicitly permits resetting an incompatible
+format during startup. Remove that flag after the transition. Reset deletes
+fingerprint decisions and history; restore the pre-upgrade backup if rolling
+back the binary. Fresh databases adopt the new format without a reset.
+
+Strict mode now denies **pending** entries from untrusted sources. Ending
+`--allow-unknown` enrollment therefore requires approving the clients that
+should retain access. A connection from a trusted source remains a per-connection
+bypass and does not approve its fingerprint globally.
+
+SMTP notification URLs must explicitly include `encryption=ImplicitTLS`,
+using the server's implicit TLS listener (typically port 465), for example:
+
+```text
+smtp://USER:PASSWORD@smtp.example.com:465/?from=gate@example.com&to=ops@example.com&encryption=ImplicitTLS
+```
+
+TLS certificates are verified. URLs using omitted/Auto encryption, None, or
+ExplicitTLS are rejected, including on port 465, to make the required transport
+unambiguous. Shoutrrr's ExplicitTLS mode does not require STARTTLS support and
+therefore cannot provide the required guarantee. A server offering only
+STARTTLS needs an implicit TLS endpoint or a different encrypted notification
+service before this update can load that configuration.
