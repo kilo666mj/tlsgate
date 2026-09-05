@@ -321,6 +321,9 @@ func registerStatus(st *store.Store, fp string, status Status, label string) err
 	if !validFingerprintForMethod(fp, FingerprintMethod(method)) {
 		return fmt.Errorf("--register requires a full %s fingerprint, got %q", expectedFingerprintDesc(method), fp)
 	}
+	if _, err := reconcileFingerprintFormat(st, false); err != nil {
+		return err
+	}
 	return st.UpsertStatus(fp, status, label)
 }
 

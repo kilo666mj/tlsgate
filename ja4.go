@@ -142,15 +142,19 @@ func ja4Count(n int) string {
 	return fmt.Sprintf("%02d", n)
 }
 
-// ja4ALPN returns the first and last character of the first ALPN protocol
-// (e.g. "h2" -> "h2", "http/1.1" -> "h1"), or "00" when no ALPN is offered.
+// ja4ALPN uses ASCII alphanumeric endpoint bytes, or the endpoint hex
+// digits when either byte is not alphanumeric, as specified by JA4.
 func ja4ALPN(protocols []string) string {
 	if len(protocols) == 0 || protocols[0] == "" {
 		return "00"
 	}
 	p := protocols[0]
-	r := []rune(p)
-	return string(r[0]) + string(r[len(r)-1])
+	first, last := p[0], p[len(p)-1]
+	if asciiAlphanumeric(first) && asciiAlphanumeric(last) {
+		return string([]byte{first, last})
+	}
+	const digits = "0123456789abcdef"
+	return string([]byte{digits[first>>4], digits[last&15]})
 }
 
 func sortU16(vals []uint16) []uint16 {
@@ -170,4 +174,8 @@ func ja4HexList(vals []uint16) string {
 func ja4Hash12(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+func asciiAlphanumeric(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
 }

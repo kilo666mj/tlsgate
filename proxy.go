@@ -82,7 +82,7 @@ func cmdServe(args []string) {
 	configPath := fs.String("config", defaultConfig, "JSON config path for alerting")
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
-	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when --fingerprint differs from the database's method")
+	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when the method or fingerprint format differs")
 	proxyProtocol := fs.String("proxy-protocol", "off", "PROXY protocol sent to backends: off or v2")
 	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "on upgrade/shutdown, how long to wait for existing connections to finish (0 = forever)")
 	fs.Parse(args)
@@ -134,9 +134,20 @@ func cmdServe(args []string) {
 		log.Fatalf("create db dir: %v", err)
 	}
 
-	st, err := NewStore(*dbPath)
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	st, err := newStoreWithLimit(*dbPath, cfg.MaxFingerprints)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
+	}
+
+	if purged, err := reconcileFingerprintFormat(st, *resetFingerprints); err != nil {
+		log.Fatalf("%v", err)
+	} else if purged > 0 {
+		log.Printf("reset %d fingerprint(s) for canonical JA3/JA4 format", purged)
 	}
 
 	// The fp keyspace is method-specific, so guard against an accidental
@@ -148,10 +159,6 @@ func cmdServe(args []string) {
 		log.Printf("reset %d fingerprint(s) switching to method %s", purged, method)
 	}
 
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
 	alerter, err := NewBlockedRangeAlerter(cfg)
 	if err != nil {
 		log.Fatalf("load alert ranges: %v", err)
@@ -173,8 +180,9 @@ func cmdServe(args []string) {
 	}
 
 	// Bound store growth from unauthenticated unknown clients: trim back to
-	// the configured cap at startup and on a timer. Approved entries are
-	// never evicted (see Store.PruneToLimit).
+	// the configured cap at startup and on a timer, including rows added by
+	// control-plane decisions. Observe also enforces the cap immediately.
+	// Approved entries are never evicted (see Store.PruneToLimit).
 	if cfg.MaxFingerprints > 0 {
 		log.Printf("max fingerprints: %d", cfg.MaxFingerprints)
 		prune := func() {
@@ -330,20 +338,25 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 			switch entry.Status {
 			case StatusBlocked:
 				if whitelisted {
-					log.Printf("[%s:%d] WHITELIST forwarding blocked fp=%s", clientIP, port, fp)
+					log.Printf("[%s:%d] WHITELIST forwarding blocked fp=%q", clientIP, port, fp)
 					break
 				}
-				log.Printf("[%s:%d] BLOCKED  fp=%s", clientIP, port, fp)
+				log.Printf("[%s:%d] BLOCKED  fp=%q", clientIP, port, fp)
 				alerter.AlertBlocked(st, clientIP, port, fp, meta)
 				return
 			case StatusPending:
+				if blockThis {
+					log.Printf("[%s:%d] BLOCKED pending fp=%q", clientIP, port, fp)
+					alerter.AlertBlocked(st, clientIP, port, fp, meta)
+					return
+				}
 				tag := "PENDING "
 				if whitelisted {
 					tag = "WHITELIST"
 				}
-				log.Printf("[%s:%d] %s fp=%s sni=%q alpn=%q ja3=%s ja4=%s", clientIP, port, tag, fp, sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4)
+				log.Printf("[%s:%d] %s fp=%q sni=%q alpn=%q ja3=%q ja4=%q", clientIP, port, tag, fp, sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4)
 			case StatusApproved:
-				log.Printf("[%s:%d] APPROVED fp=%s", clientIP, port, fp)
+				log.Printf("[%s:%d] APPROVED fp=%q", clientIP, port, fp)
 			}
 		}
 	} else {

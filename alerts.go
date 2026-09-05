@@ -177,7 +177,8 @@ func loadConfig(path string) (AppConfig, error) {
 // requireSecureNotificationURL rejects Shoutrrr notification URLs that would
 // deliver alert content and webhook tokens over cleartext. Shoutrrr opts into
 // plaintext either via a "+http" scheme suffix (e.g. generic+http://) or a
-// disabletls query parameter, so reject both.
+// disabletls query parameter, so reject both. SMTP must use implicit TLS;
+// Shoutrrr's explicit TLS mode permits plaintext if STARTTLS is unavailable.
 func requireSecureNotificationURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -187,9 +188,27 @@ func requireSecureNotificationURL(rawURL string) error {
 	if scheme == "http" || strings.HasSuffix(scheme, "+http") {
 		return fmt.Errorf("notification URL %s://%s uses cleartext transport; use an https/+https service URL", scheme, u.Host)
 	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return fmt.Errorf("invalid notification URL query")
+	}
+	if scheme == "smtp" {
+		encryption := ""
+		for key, vals := range query {
+			if strings.EqualFold(key, "encryption") {
+				if encryption != "" || len(vals) != 1 || !strings.EqualFold(vals[0], "ImplicitTLS") {
+					return fmt.Errorf("SMTP notifications require encryption=ImplicitTLS with no duplicate encryption options")
+				}
+				encryption = vals[0]
+			}
+		}
+		if encryption == "" {
+			return fmt.Errorf("SMTP notifications require encryption=ImplicitTLS; STARTTLS can fall back to plaintext")
+		}
+	}
 	// Shoutrrr matches query keys case-insensitively, so normalize before
 	// looking for a disabletls override.
-	for key, vals := range u.Query() {
+	for key, vals := range query {
 		if strings.ToLower(key) != "disabletls" {
 			continue
 		}
@@ -346,6 +365,11 @@ func blockedRangeMessage(rangeName, ip string, port int, fp string, meta TLSMeta
 }
 
 func newNotificationSender(urls []string, mode NotificationMode) (func(string) error, error) {
+	for _, rawURL := range urls {
+		if err := requireSecureNotificationURL(rawURL); err != nil {
+			return nil, err
+		}
+	}
 	switch mode {
 	case NotificationModeFailover:
 		senders := make([]func(string, *types.Params) []error, 0, len(urls))

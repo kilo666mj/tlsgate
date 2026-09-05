@@ -1,6 +1,10 @@
 package main
 
 import (
+	"database/sql"
+	"fmt"
+	"net/url"
+
 	"github.com/kilo666mj/gatekit/store"
 )
 
@@ -45,7 +49,21 @@ var legacyColumns = []store.LegacyColumn{
 // NewStore opens the fingerprint database, folding a pre-gatekit schema into
 // the metadata bag if it finds one.
 func NewStore(path string) (*store.Store, error) {
-	return store.Open(store.Options{Path: path, Legacy: legacyColumns})
+	return newStoreWithLimit(path, 0)
+}
+
+// newStoreWithLimit applies the serving process's row cap on each new observation.
+// CLI opens remain uncapped so management operations do not apply a default policy.
+func newStoreWithLimit(path string, limit int) (*store.Store, error) {
+	st, err := store.Open(store.Options{Path: path, Legacy: legacyColumns, MaxFingerprints: limit})
+	if err != nil {
+		return nil, err
+	}
+	if err := boundBlockedRangeAlerts(path); err != nil {
+		st.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 // toMeta renders a fingerprinted ClientHello into the store's metadata bag.
@@ -113,4 +131,61 @@ func metaU16s(meta map[string]any, key string) []uint16 {
 		return out
 	}
 	return nil
+}
+
+// Deduplication retains the most recently inserted range/IP pairs. Once evicted,
+// a pair can notify again. Keep this independent of the fingerprint row policy.
+const maxBlockedRangeAlerts = 10000
+
+// boundBlockedRangeAlerts installs a database-level limit so all Gatekit writers
+// (including concurrent serving processes during handoff) enforce it atomically.
+// This uses the Gatekit v0.5.0 table schema; keep an integration test on upgrades.
+func boundBlockedRangeAlerts(path string) error {
+	q := url.Values{"_pragma": {"busy_timeout=5000"}}
+	db, err := sql.Open("sqlite", path+"?"+q.Encode())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	trim := fmt.Sprintf(`DELETE FROM blocked_range_alerts WHERE rowid <= (
+ SELECT rowid FROM blocked_range_alerts ORDER BY rowid DESC LIMIT 1 OFFSET %d
+ )`, maxBlockedRangeAlerts)
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS tlsgate_bound_alerts_v1
+ AFTER INSERT ON blocked_range_alerts BEGIN ` + trim + `; END`); err != nil {
+		return fmt.Errorf("install alert retention: %w", err)
+	}
+	if _, err := db.Exec(trim); err != nil {
+		return fmt.Errorf("trim alert history: %w", err)
+	}
+	return nil
+}
+
+const metaFingerprintFormat = "tlsgate_fingerprint_format"
+const canonicalFingerprintFormat = "2"
+
+// The old JA3/GREASE and JA4/ALPN algorithms used different keys. Never silently
+// reinterpret stored decisions, including databases predating the format marker.
+func reconcileFingerprintFormat(st *store.Store, reset bool) (int64, error) {
+	format, err := st.GetMeta(metaFingerprintFormat)
+	if err != nil {
+		return 0, err
+	}
+	if format == canonicalFingerprintFormat {
+		return 0, nil
+	}
+	last, err := st.LastFingerprint()
+	if err != nil {
+		return 0, err
+	}
+	if last != "" && !reset {
+		return 0, fmt.Errorf("database uses an older or unsupported fingerprint format %q; back up the database, then use --reset-fingerprints and re-enroll clients for canonical JA3/JA4", format)
+	}
+	var deleted int64
+	if last != "" {
+		deleted, err = st.ResetFingerprints()
+		if err != nil {
+			return 0, err
+		}
+	}
+	return deleted, st.SetMeta(metaFingerprintFormat, canonicalFingerprintFormat)
 }
