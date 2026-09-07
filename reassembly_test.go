@@ -26,12 +26,12 @@ func TestReadClientHelloReassemblesMultipleRecords(t *testing.T) {
 	stream := append(tlsRecord(body[:k]), tlsRecord(body[k:])...)
 
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	go func() {
-		server.Write(stream)
-		server.Close()
+		_, _ = server.Write(stream)
+		_ = server.Close()
 	}()
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
 
 	hdr := make([]byte, 5)
 	if _, err := io.ReadFull(client, hdr); err != nil {

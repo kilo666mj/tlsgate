@@ -74,13 +74,13 @@ func TestHandleConnWritesProxyV2BeforeUntouchedTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer backend.Close()
+	defer func() { _ = backend.Close() }()
 
 	frontend, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer frontend.Close()
+	defer func() { _ = frontend.Close() }()
 
 	st := newTestStore(t)
 	go func() {
@@ -94,7 +94,7 @@ func TestHandleConnWritesProxyV2BeforeUntouchedTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := client.Write(truncatedClientHello); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestHandleConnWritesProxyV2BeforeUntouchedTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	if err := upstream.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}

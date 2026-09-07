@@ -16,7 +16,11 @@ func TestServingStoreImmediatelyLimitsNewFingerprints(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer st.Close()
+			defer func() {
+				if err := st.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			}()
 			if _, err := st.ReconcileFingerprintMethod("ja4", false); err != nil {
 				t.Fatal(err)
 			}
@@ -57,7 +61,11 @@ func TestTLSMetadataAndHistoryBoundsPreserveApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	if err := st.UpsertStatus("client", StatusApproved, "known client"); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -60,8 +61,7 @@ func newStoreWithLimit(path string, limit int) (*store.Store, error) {
 		return nil, err
 	}
 	if err := boundBlockedRangeAlerts(path); err != nil {
-		st.Close()
-		return nil, err
+		return nil, errors.Join(err, closeError("close store", st.Close))
 	}
 	return st, nil
 }
@@ -140,13 +140,13 @@ const maxBlockedRangeAlerts = 10000
 // boundBlockedRangeAlerts installs a database-level limit so all Gatekit writers
 // (including concurrent serving processes during handoff) enforce it atomically.
 // This uses the Gatekit v0.5.0 table schema; keep an integration test on upgrades.
-func boundBlockedRangeAlerts(path string) error {
+func boundBlockedRangeAlerts(path string) (err error) {
 	q := url.Values{"_pragma": {"busy_timeout=5000"}}
 	db, err := sql.Open("sqlite", path+"?"+q.Encode())
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer closeWithError(&err, "close alert-bound db", db.Close)
 	trim := fmt.Sprintf(`DELETE FROM blocked_range_alerts WHERE rowid <= (
  SELECT rowid FROM blocked_range_alerts ORDER BY rowid DESC LIMIT 1 OFFSET %d
  )`, maxBlockedRangeAlerts)

@@ -84,14 +84,14 @@ func backendRecorder(t *testing.T) (string, <-chan []byte) {
 	if err != nil {
 		t.Fatalf("listen backend: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	got := make(chan []byte, 1)
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, 64)
 		n, _ := conn.Read(buf)
 		got <- buf[:n]
@@ -104,7 +104,7 @@ func backendRecorder(t *testing.T) (string, <-chan []byte) {
 func captureClientHello(t *testing.T) []byte {
 	t.Helper()
 	server, client := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	go func() {
 		c := tls.Client(client, &tls.Config{
 			ServerName:         "mail.example.com",
@@ -112,7 +112,7 @@ func captureClientHello(t *testing.T) []byte {
 			InsecureSkipVerify: true,
 		})
 		_ = c.Handshake()
-		c.Close()
+		_ = c.Close()
 	}()
 	if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
@@ -142,14 +142,14 @@ func TestHandleConnBlocksUnparseableWhenBlockUnknown(t *testing.T) {
 	backend, got := backendRecorder(t)
 	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
-	defer testConn.Close()
+	defer func() { _ = testConn.Close() }()
 
 	done := make(chan struct{})
 	go func() {
 		handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 		close(done)
 	}()
-	go testConn.Write(truncatedClientHello)
+	go func() { _, _ = testConn.Write(truncatedClientHello) }()
 
 	select {
 	case <-done:
@@ -163,10 +163,10 @@ func TestHandleConnForwardsUnparseableWhenAllowUnknown(t *testing.T) {
 	backend, got := backendRecorder(t)
 	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
-	defer testConn.Close()
+	defer func() { _ = testConn.Close() }()
 
 	go handleConn(clientConn, backend, 993, st, false, MethodJA3, nil, nil, &ipAllowlist{}, false)
-	go testConn.Write(truncatedClientHello)
+	go func() { _, _ = testConn.Write(truncatedClientHello) }()
 
 	select {
 	case b := <-got:
@@ -182,10 +182,10 @@ func TestHandleConnBlocksNonTLSWhenBlockUnknown(t *testing.T) {
 	backend, got := backendRecorder(t)
 	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
-	defer testConn.Close()
+	defer func() { _ = testConn.Close() }()
 
 	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
-	go testConn.Write([]byte("HELO plain\r\n"))
+	go func() { _, _ = testConn.Write([]byte("HELO plain\r\n")) }()
 
 	expectNoBackend(t, got)
 }
@@ -194,11 +194,11 @@ func TestHandleConnRejectsOversizedRecord(t *testing.T) {
 	backend, got := backendRecorder(t)
 	st := newTestStore(t)
 	clientConn, testConn := net.Pipe()
-	defer testConn.Close()
+	defer func() { _ = testConn.Close() }()
 
 	go handleConn(clientConn, backend, 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 	// 0x16 record header declaring a 65535-byte body, far above maxTLSRecordBody.
-	go testConn.Write([]byte{0x16, 0x03, 0x01, 0xff, 0xff})
+	go func() { _, _ = testConn.Write([]byte{0x16, 0x03, 0x01, 0xff, 0xff}) }()
 
 	expectNoBackend(t, got)
 }
@@ -208,7 +208,7 @@ func TestHandleConnDropsRateLimitedConnection(t *testing.T) {
 	st := newTestStore(t)
 	limiter := ratelimit.New(0, 0, time.Minute) // no tokens: every IP denied
 	clientConn, testConn := net.Pipe()
-	defer testConn.Close()
+	defer func() { _ = testConn.Close() }()
 
 	done := make(chan struct{})
 	go func() {
@@ -281,10 +281,10 @@ func TestReadClientHelloReassemblesTinyFirstFragment(t *testing.T) {
 	fragmented := fragmentHandshake(hello, 2) // first record: 2 handshake bytes
 
 	server, client := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	go func() {
-		client.Write(fragmented)
-		client.Close()
+		_, _ = client.Write(fragmented)
+		_ = client.Close()
 	}()
 	if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
@@ -325,15 +325,15 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen backend: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	fromClient := make(chan []byte, 8)
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
-		conn.Write([]byte("* OK banner\r\n"))
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte("* OK banner\r\n"))
 		buf := make([]byte, 512)
 		for {
 			n, err := conn.Read(buf)
@@ -347,16 +347,16 @@ func TestHandleConnProxiesApprovedFingerprintBothWays(t *testing.T) {
 	}()
 
 	clientConn, testConn := net.Pipe()
-	defer testConn.Close()
+	defer func() { _ = testConn.Close() }()
 	go handleConn(clientConn, ln.Addr().String(), 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
 
 	go func() {
-		testConn.Write(hello)
-		testConn.Write([]byte("a LOGIN user pass\r\n"))
+		_, _ = testConn.Write(hello)
+		_, _ = testConn.Write([]byte("a LOGIN user pass\r\n"))
 	}()
 
 	// server -> client: banner reaches the client.
-	testConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = testConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 64)
 	n, err := testConn.Read(buf)
 	if err != nil {

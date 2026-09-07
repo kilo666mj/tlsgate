@@ -85,7 +85,8 @@ func cmdServe(args []string) {
 	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when the method or fingerprint format differs")
 	proxyProtocol := fs.String("proxy-protocol", "off", "PROXY protocol sent to backends: off or v2")
 	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "on upgrade/shutdown, how long to wait for existing connections to finish (0 = forever)")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 
 	if len(routes) == 0 {
 		log.Fatalf("no routes: pass at least one --route LISTEN=BACKEND")
@@ -276,7 +277,12 @@ func cmdServe(args []string) {
 }
 
 func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow *ipAllowlist, sendProxyV2 bool) {
-	defer client.Close()
+	// A peer that already went away is the normal case, not a fault.
+	defer func() {
+		if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("[%s] close client: %v", client.RemoteAddr(), err)
+		}
+	}()
 
 	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
 
@@ -294,7 +300,10 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 		return
 	}
 
-	client.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if err := client.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		log.Printf("[%s:%d] set handshake deadline: %v", clientIP, port, err)
+		return
+	}
 
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(client, header); err != nil {
@@ -368,14 +377,21 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 		log.Printf("[%s:%d] ALLOWED  non-TLS connection", clientIP, port)
 	}
 
-	client.SetReadDeadline(time.Time{})
+	if err := client.SetReadDeadline(time.Time{}); err != nil {
+		log.Printf("[%s:%d] clear handshake deadline: %v", clientIP, port, err)
+		return
+	}
 
 	upstream, err := net.DialTimeout("tcp", backend, 10*time.Second)
 	if err != nil {
 		log.Printf("[%s:%d] dial backend: %v", clientIP, port, err)
 		return
 	}
-	defer upstream.Close()
+	defer func() {
+		if err := upstream.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("[%s:%d] close backend: %v", clientIP, port, err)
+		}
+	}()
 	if sendProxyV2 {
 		header, err := proxyV2Header(client.RemoteAddr(), client.LocalAddr())
 		if err != nil {

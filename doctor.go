@@ -43,21 +43,30 @@ func runDoctor(args []string, out io.Writer) error {
 		return fmt.Errorf("invalid --proxy-protocol %q (want off or v2)", *proxyProtocol)
 	}
 
-	fmt.Fprintf(out, "version: %s\n", version)
-	fmt.Fprintf(out, "database: %s", *dbPath)
+	// A diagnostic whose output is truncated is worse than no diagnostic, so
+	// keep the first write failure and report it to the caller.
+	var writeErr error
+	emit := func(format string, args ...any) {
+		if writeErr != nil {
+			return
+		}
+		_, writeErr = fmt.Fprintf(out, format, args...)
+	}
+	emit("version: %s\n", version)
+	emit("database: %s", *dbPath)
 	if info, err := os.Stat(*dbPath); err == nil {
-		fmt.Fprintf(out, " (present, mode %s)\n", info.Mode().Perm())
+		emit(" (present, mode %s)\n", info.Mode().Perm())
 	} else if os.IsNotExist(err) {
-		fmt.Fprintln(out, " (not created yet)")
+		emit(" (not created yet)\n")
 	} else {
 		return fmt.Errorf("inspect database: %w", err)
 	}
 
-	fmt.Fprintf(out, "config: %s", *configPath)
+	emit("config: %s", *configPath)
 	if _, err := os.Stat(*configPath); err == nil {
-		fmt.Fprintln(out, " (present)")
+		emit(" (present)\n")
 	} else if os.IsNotExist(err) {
-		fmt.Fprintln(out, " (absent; built-in defaults apply)")
+		emit(" (absent; built-in defaults apply)\n")
 	} else {
 		return fmt.Errorf("inspect config: %w", err)
 	}
@@ -69,29 +78,29 @@ func runDoctor(args []string, out io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(out, "fingerprint method: %s\n", method)
-	fmt.Fprintf(out, "backend PROXY protocol: %s\n", *proxyProtocol)
+	emit("fingerprint method: %s\n", method)
+	emit("backend PROXY protocol: %s\n", *proxyProtocol)
 	if *allowUnknown {
-		fmt.Fprintln(out, "unknown fingerprints: allowed as pending (enrollment mode)")
+		emit("unknown fingerprints: allowed as pending (enrollment mode)\n")
 	} else {
-		fmt.Fprintln(out, "unknown fingerprints: blocked")
+		emit("unknown fingerprints: blocked\n")
 	}
-	fmt.Fprintf(out, "max fingerprints: %d\n", cfg.MaxFingerprints)
-	fmt.Fprintf(out, "trusted source ranges: %d\n", len(cfg.ApproveRanges))
-	fmt.Fprintf(out, "alert ranges: %d\n", len(cfg.AlertRanges))
+	emit("max fingerprints: %d\n", cfg.MaxFingerprints)
+	emit("trusted source ranges: %d\n", len(cfg.ApproveRanges))
+	emit("alert ranges: %d\n", len(cfg.AlertRanges))
 	if cfg.ControlPlane.Enabled() {
-		fmt.Fprintf(out, "control plane: enabled (%s)\n", cfg.ControlPlane.URL)
+		emit("control plane: enabled (%s)\n", cfg.ControlPlane.URL)
 	} else {
-		fmt.Fprintln(out, "control plane: disabled")
+		emit("control plane: disabled\n")
 	}
 	if len(routes) == 0 {
-		fmt.Fprintln(out, "routes: none supplied; pass the same --route flags used by serve")
+		emit("routes: none supplied; pass the same --route flags used by serve\n")
 	} else {
 		for _, route := range routes {
-			fmt.Fprintf(out, "route: %s -> %s\n", route.Listen, route.Backend)
+			emit("route: %s -> %s\n", route.Listen, route.Backend)
 		}
 	}
-	return nil
+	return writeErr
 }
 
 func validateDoctorConfig(cfg AppConfig) error {

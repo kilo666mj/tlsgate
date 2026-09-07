@@ -69,7 +69,8 @@ func cmdList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
 	verbose := fs.Bool("v", false, "show full TLS metadata")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 
 	st, err := NewStore(*dbPath)
 	if err != nil {
@@ -93,11 +94,13 @@ func cmdList(args []string) {
 		return listEntryLess(keys[i], fps[keys[i]], keys[j], fps[keys[j]])
 	})
 
+	// tabwriter buffers the table and reports the underlying write failure
+	// from Flush, which is where a truncated pipe surfaces.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	if *verbose {
-		fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tSIGALGS\tJA3\tJA4\tIPs")
+		_, _ = fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tSIGALGS\tJA3\tJA4\tIPs")
 	} else {
-		fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tIPs")
+		_, _ = fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tIPs")
 	}
 	for _, k := range keys {
 		e := fps[k]
@@ -111,7 +114,7 @@ func cmdList(args []string) {
 			ips = "-"
 		}
 		if *verbose {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
 				displayValue(tls.SNI),
@@ -123,7 +126,7 @@ func cmdList(args []string) {
 				displayValue(ips),
 			)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
 				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
 				displayValue(tls.SNI),
@@ -133,7 +136,9 @@ func cmdList(args []string) {
 			)
 		}
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fatalf("write output: %v", err)
+	}
 }
 
 func listEntryLess(fpA string, a Entry, fpB string, b Entry) bool {
@@ -250,7 +255,8 @@ func cmdApprove(args []string) {
 	dbPath := fs.String("db", defaultDB, "database path")
 	label := fs.String("label", "", "label for this fingerprint")
 	register := fs.Bool("register", false, "create the fingerprint if it has not been observed yet (requires a full fingerprint)")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		fatalf("usage: approve [--label <name>] [--register] <fingerprint>")
 	}
@@ -282,7 +288,8 @@ func cmdBlock(args []string) {
 	dbPath := fs.String("db", defaultDB, "database path")
 	label := fs.String("label", "", "label for this fingerprint")
 	register := fs.Bool("register", false, "create the fingerprint if it has not been observed yet (requires a full fingerprint)")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		fatalf("usage: block [--label <name>] [--register] <fingerprint>")
 	}
@@ -352,7 +359,8 @@ func expectedFingerprintDesc(method string) string {
 func cmdLabel(args []string) {
 	fs := flag.NewFlagSet("label", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fatalf("usage: label <fingerprint> <name>")
 	}
@@ -369,7 +377,8 @@ func cmdLabel(args []string) {
 func cmdDelete(args []string) {
 	fs := flag.NewFlagSet("delete", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		fatalf("usage: delete <fingerprint>")
 	}
@@ -387,7 +396,8 @@ func cmdReset(args []string) {
 	fs := flag.NewFlagSet("reset", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
 	fingerprint := fs.String("fingerprint", "", "fingerprint method to record after the reset: ja3 or ja4 (default: keep the database's current method)")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 
 	st, err := NewStore(*dbPath)
 	if err != nil {

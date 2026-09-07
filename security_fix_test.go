@@ -26,7 +26,7 @@ func exerciseGate(t *testing.T, st *store.Store, hello []byte, method Fingerprin
 	t.Helper()
 	backend, got := backendRecorder(t)
 	client, peer := net.Pipe()
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 	allow := &ipAllowlist{}
 	if trusted {
 		var err error
@@ -52,7 +52,7 @@ func exerciseGate(t *testing.T, st *store.Store, hello []byte, method Fingerprin
 		}
 	}
 	if forward {
-		peer.Close()
+		_ = peer.Close()
 	}
 	select {
 	case <-done:
@@ -69,7 +69,11 @@ func TestPendingCannotEscapeEnrollmentOrTrustedSource(t *testing.T) {
 		for _, source := range []string{"enrollment", "trusted"} {
 			t.Run(string(method)+"/"+source, func(t *testing.T) {
 				st := newTestStore(t)
-				defer st.Close()
+				defer func() {
+					if err := st.Close(); err != nil {
+						t.Errorf("Close: %v", err)
+					}
+				}()
 				hello := captureClientHello(t)
 				// Create pending through the actual connection path, then remove its bypass.
 				exerciseGate(t, st, hello, method, source == "trusted", source == "trusted", true)
@@ -123,14 +127,14 @@ func TestSMTPDoesNotFallBackToPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	received := make(chan []byte, 1)
 	go func() {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		_ = c.SetDeadline(time.Now().Add(2 * time.Second))
 		// A server without STARTTLS must not receive SMTP commands or alert content.
 		_, _ = fmt.Fprint(c, "220 plaintext SMTP\r\n")
@@ -200,7 +204,11 @@ func TestFingerprintFormatRequiresExplicitReset(t *testing.T) {
 	for _, format := range []string{"", "1", "future"} {
 		t.Run(format, func(t *testing.T) {
 			st := newTestStore(t)
-			defer st.Close()
+			defer func() {
+				if err := st.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			}()
 			if err := st.SetMeta(metaFingerprintFormat, format); err != nil {
 				t.Fatal(err)
 			}
@@ -232,7 +240,11 @@ func TestFingerprintFormatRequiresExplicitReset(t *testing.T) {
 		})
 	}
 	st := newTestStore(t)
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	if _, err := reconcileFingerprintFormat(st, false); err != nil {
 		t.Fatalf("fresh database: %v", err)
 	}
@@ -245,12 +257,20 @@ func TestAlertHistoryBoundCoversExistingAndConcurrentWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer old.Close()
+	defer func() {
+		if err := old.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	if _, err := db.Exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<?)
  INSERT INTO blocked_range_alerts SELECT 'watched', printf('old-%d',x), 'fp', '2026-01-01' FROM n`, maxBlockedRangeAlerts+100); err != nil {
 		t.Fatal(err)
@@ -259,7 +279,11 @@ func TestAlertHistoryBoundCoversExistingAndConcurrentWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	assertBound := func() {
 		t.Helper()
 		var n int
