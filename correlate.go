@@ -37,7 +37,8 @@ func cmdCorrelate(args []string) {
 	logPath := fs.String("log", defaultSyslog, "syslog path")
 	window := fs.Duration("window", 2*time.Minute, "time window around first/last seen")
 	limit := fs.Int("limit", 100, "maximum matches to print")
-	fs.Parse(args)
+	// ExitOnError: Parse exits on bad input, so this can only return nil.
+	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		fatalf("usage: correlate [--log <path>] [--window <duration>] <fingerprint>")
 	}
@@ -77,10 +78,12 @@ func cmdCorrelate(args []string) {
 		return
 	}
 
+	// tabwriter buffers the table and reports the underlying write failure
+	// from Flush, which is where a truncated pipe surfaces.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TIME\tIP\tSOURCE\tUSER\tLINE")
+	_, _ = fmt.Fprintln(w, "TIME\tIP\tSOURCE\tUSER\tLINE")
 	for _, m := range matches {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			m.when.Format("2006-01-02 15:04:05"),
 			m.ip,
 			valueOrDash(m.source),
@@ -88,7 +91,9 @@ func cmdCorrelate(args []string) {
 			sanitizeLog(m.line),
 		)
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fatalf("write output: %v", err)
+	}
 }
 
 func findFingerprint(fps map[string]Entry, query string) (string, Entry, error) {
@@ -117,7 +122,8 @@ func correlateSyslog(path string, entry Entry, window time.Duration, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	// Read-only: nothing was written, so a close failure changes nothing.
+	defer func() { _ = f.Close() }()
 
 	ipSet := make(map[string]struct{}, len(entry.IPs))
 	for _, ip := range entry.IPs {

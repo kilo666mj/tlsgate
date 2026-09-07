@@ -24,7 +24,11 @@ func TestTLSMetadataRoundTripsThroughStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	meta := TLSMetadata{
 		JA3:                 "aabbccddeeff",
@@ -45,12 +49,18 @@ func TestTLSMetadataRoundTripsThroughStore(t *testing.T) {
 
 	// Re-open so the values come back off disk as JSON rather than out of the
 	// in-process map: numeric lists decode as float64 and must be narrowed.
-	st.Close()
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	reopened, err := NewStore(filepath.Join(filepath.Dir(st.Path()), "db.sqlite"))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	entry, err := reopened.Get("fp1")
 	if err != nil {
@@ -112,13 +122,19 @@ func TestOpensPreGatekitDatabase(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("seed legacy schema: %v", err)
 	}
-	db.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	st, err := NewStore(path)
 	if err != nil {
 		t.Fatalf("NewStore on legacy db: %v", err)
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	entry, err := st.Get("fp1")
 	if err != nil {

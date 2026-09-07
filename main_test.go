@@ -24,7 +24,7 @@ func muteStdout(t *testing.T) {
 	os.Stdout = devnull
 	t.Cleanup(func() {
 		os.Stdout = orig
-		devnull.Close()
+		_ = devnull.Close()
 	})
 }
 

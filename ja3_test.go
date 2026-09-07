@@ -10,7 +10,7 @@ import (
 
 func TestExtractTLSMetadata(t *testing.T) {
 	server, client := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	done := make(chan struct{})
 	go func() {
@@ -21,7 +21,7 @@ func TestExtractTLSMetadata(t *testing.T) {
 			InsecureSkipVerify: true,
 		})
 		_ = tlsConn.Handshake()
-		tlsConn.Close()
+		_ = tlsConn.Close()
 	}()
 
 	if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -36,7 +36,7 @@ func TestExtractTLSMetadata(t *testing.T) {
 	if _, err := io.ReadFull(server, body); err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	server.Close()
+	_ = server.Close()
 	<-done
 
 	fp, meta, err := extractTLSMetadata(append(header, body...), MethodJA3)
