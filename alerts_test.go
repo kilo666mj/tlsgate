@@ -99,7 +99,7 @@ func TestIPAllowlistReplacesDynamicRangesAndPreservesStatic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := allow.replaceDynamic([]string{"198.51.100.7/32", "2001:db8:1::/64"}); err != nil {
+	if _, err := allow.replaceDynamic([]string{"198.51.100.7/32", "2001:db8:1::/64"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, ip := range []string{"192.0.2.4", "198.51.100.7", "2001:db8:1::9"} {
@@ -107,17 +107,44 @@ func TestIPAllowlistReplacesDynamicRangesAndPreservesStatic(t *testing.T) {
 			t.Errorf("trusted address %s did not match", ip)
 		}
 	}
-	if err := allow.replaceDynamic([]string{"203.0.113.8/32"}); err != nil {
+	if _, err := allow.replaceDynamic([]string{"203.0.113.8/32"}); err != nil {
 		t.Fatal(err)
 	}
 	if allow.contains("198.51.100.7") || !allow.contains("192.0.2.4") || !allow.contains("203.0.113.8") {
 		t.Fatal("dynamic replacement did not preserve only static plus current ranges")
 	}
-	if err := allow.replaceDynamic([]string{"bad"}); err == nil {
+	if _, err := allow.replaceDynamic([]string{"bad"}); err == nil {
 		t.Fatal("invalid dynamic range accepted")
 	}
 	if !allow.contains("203.0.113.8") {
 		t.Fatal("invalid update changed last-known dynamic ranges")
+	}
+}
+
+func TestDynamicRangesReportOnlyInitialLoadAndChanges(t *testing.T) {
+	allow := &ipAllowlist{}
+	for _, tc := range []struct {
+		name             string
+		ranges           []string
+		changed, invalid bool
+	}{
+		{"invalid initial", []string{"bad"}, false, true},
+		{"empty initial", nil, true, false},
+		{"empty unchanged", []string{}, false, false},
+		{"new ranges", []string{"192.0.2.0/24", "2001:db8::/64"}, true, false},
+		{"equivalent set", []string{"2001:db8::1/64", "192.0.2.9/24", "192.0.2.0/24"}, false, false},
+		{"invalid replacement", []string{"203.0.113.0/24", "bad"}, false, true},
+		{"previous set retained", []string{"192.0.2.0/24", "2001:db8::/64"}, false, false},
+		{"same count different ranges", []string{"203.0.113.0/24", "2001:db8::/64"}, true, false},
+		{"clear", nil, true, false},
+		{"still empty", nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed, err := allow.replaceDynamic(tc.ranges)
+			if changed != tc.changed || (err != nil) != tc.invalid {
+				t.Fatalf("changed=%t err=%v, want changed=%t invalid=%t", changed, err, tc.changed, tc.invalid)
+			}
+		})
 	}
 }
 

@@ -76,8 +76,8 @@ const (
 
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	var routes gateproxy.Routes
-	fs.Var(&routes, "route", "LISTEN=BACKEND route to proxy, repeatable (e.g. [::]:993=127.0.0.1:10993)")
+	var routes routeConfigs
+	fs.Var(&routes, "route", "LISTEN=BACKEND[,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
 	dbPath := fs.String("db", defaultDB, "fingerprint database path")
 	configPath := fs.String("config", defaultConfig, "JSON config path for alerting")
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
@@ -94,8 +94,6 @@ func cmdServe(args []string) {
 	if *proxyProtocol != "off" && *proxyProtocol != "v2" {
 		log.Fatalf("invalid --proxy-protocol %q (want off or v2)", *proxyProtocol)
 	}
-	sendProxyV2 := *proxyProtocol == "v2"
-
 	log.Printf("tlsgate %s starting", version)
 
 	// tableflip coordinates a zero-downtime handoff: on SIGHUP it re-execs the
@@ -173,10 +171,13 @@ func cmdServe(args []string) {
 		log.Printf("approve ranges (fingerprint gate bypassed): %s", strings.Join(cfg.ApproveRanges, ", "))
 	}
 	cfg.ControlPlane.ApplyTrustedRanges = func(ranges []string) error {
-		if err := allow.replaceDynamic(ranges); err != nil {
+		changed, err := allow.replaceDynamic(ranges)
+		if err != nil {
 			return err
 		}
-		log.Printf("gatehub trusted ranges updated: %d range(s)", len(ranges))
+		if changed {
+			log.Printf("gatehub trusted ranges updated: %d range(s)", len(ranges))
+		}
 		return nil
 	}
 
@@ -219,14 +220,10 @@ func cmdServe(args []string) {
 	// One semaphore shared across all listeners so the cap is a global
 	// ceiling on concurrent connections, not per-port.
 	log.Printf("fingerprint method: %s", method)
-	if sendProxyV2 {
-		log.Printf("backend PROXY protocol: v2")
-	}
-	blockUnknown := !*allowUnknown
-
 	proxyServer := gateproxy.NewServer(maxConcurrentConns, log.Printf)
 	var listeners []net.Listener
 	for _, rt := range routes {
+		blockUnknown, sendProxyV2 := rt.policy(*allowUnknown, *proxyProtocol)
 		// upg.Listen rather than net.Listen: on an upgrade the socket is
 		// inherited from the departing process rather than rebound, so no
 		// connection is refused in the gap between the two.
@@ -235,8 +232,8 @@ func cmdServe(args []string) {
 			log.Fatalf("listen %s: %v", rt.Listen, err)
 		}
 		listeners = append(listeners, ln)
-		log.Printf("listening on %s -> %s", rt.Listen, rt.Backend)
-		proxyServer.Serve(ln, rt, func(conn net.Conn, route gateproxy.Route) {
+		log.Printf("listening on %s -> %s (allow-unknown=%t, proxy-v2=%t)", rt.Listen, rt.Backend, !blockUnknown, sendProxyV2)
+		proxyServer.Serve(ln, rt.Route, func(conn net.Conn, route gateproxy.Route) {
 			handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow, sendProxyV2)
 		})
 	}

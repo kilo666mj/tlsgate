@@ -123,8 +123,36 @@ the original client address).
 For a backend such as nginx that supports PROXY protocol, pass
 `--proxy-protocol v2`. tlsgate then writes a binary PROXY v2 header before the
 original, byte-identical TLS stream so the backend can recover the client's
-address. The option applies to every configured route and is disabled by
-default; do not enable it until every backend listener expects PROXY protocol.
+address. This global default applies to routes without an override and is
+disabled by default. Enable it only for backends that expect PROXY protocol.
+
+### Different policies per route
+
+Append `allow-unknown=true|false` and/or `proxy-protocol=off|v2` to a route
+to override the global defaults for that listener. Existing `LISTEN=BACKEND`
+arguments retain their behavior. Overrides are independent of flag ordering.
+
+For strict mail filtering alongside HTTPS enrollment:
+
+```bash
+tlsgate serve --fingerprint ja4 \
+  --route '[::]:993=127.0.0.1:10993' \
+  --route '[::]:465=127.0.0.1:10465' \
+  --route '[::]:443=127.0.0.1:1443,allow-unknown=true,proxy-protocol=v2'
+```
+
+The routes share the fingerprint database, Gatehub decisions, trusted source
+ranges, and connection limits. Approvals and explicit blocks apply across
+routes to the same fingerprint. `allow-unknown=true` permits pending entries;
+it does not override an explicit block. A strict route still rejects a pending
+fingerprint first recorded by an enrollment route.
+
+Ansible route entries accept the corresponding `allow_unknown` boolean and
+`proxy_protocol` string. `tlsgate doctor` accepts the same route syntax and
+reports each listener's effective settings. Changing route flags requires a
+service restart; a graceful binary reload retains the existing arguments.
+
+### nginx listener configuration
 
 For nginx, the corresponding listener and real-IP configuration is typically:
 

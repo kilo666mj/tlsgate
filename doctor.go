@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/netip"
 	"os"
-
-	gateproxy "github.com/kilo666mj/gatekit/proxy"
 )
 
 func cmdDoctor(args []string) {
@@ -22,8 +20,8 @@ func cmdDoctor(args []string) {
 func runDoctor(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var routes gateproxy.Routes
-	fs.Var(&routes, "route", "LISTEN=BACKEND route to validate, repeatable")
+	var routes routeConfigs
+	fs.Var(&routes, "route", "LISTEN=BACKEND[,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
 	dbPath := fs.String("db", defaultDB, "fingerprint database path")
 	configPath := fs.String("config", defaultConfig, "JSON config path")
 	allowUnknown := fs.Bool("allow-unknown", false, "report enrollment mode")
@@ -97,7 +95,8 @@ func runDoctor(args []string, out io.Writer) error {
 		emit("routes: none supplied; pass the same --route flags used by serve\n")
 	} else {
 		for _, route := range routes {
-			emit("route: %s -> %s\n", route.Listen, route.Backend)
+			block, proxy := route.policy(*allowUnknown, *proxyProtocol)
+			emit("route: %s -> %s (allow-unknown=%t, proxy-v2=%t)\n", route.Listen, route.Backend, !block, proxy)
 		}
 	}
 	return writeErr

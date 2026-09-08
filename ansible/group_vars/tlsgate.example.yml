@@ -5,6 +5,11 @@ routes:
     backend: "127.0.0.1:10993"
   - listen: "[::]:465"
     backend: "127.0.0.1:10465"
+  # Example: enroll HTTPS separately while mail remains strict.
+  # - listen: "[::]:443"
+  #   backend: "127.0.0.1:1443"
+  #   allow_unknown: true
+  #   proxy_protocol: v2
 
 # JA4 is stable across TLS extension reordering. Changing methods later requires
 # reset_fingerprints: true for one deployment and re-enrollment of every client.

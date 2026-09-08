@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -57,9 +58,10 @@ type AppConfig struct {
 // ipAllowlist holds the parsed ApproveRanges CIDRs and answers whether a
 // source IP falls inside any of them.
 type ipAllowlist struct {
-	mu      sync.RWMutex
-	static  []netip.Prefix
-	dynamic []netip.Prefix
+	mu                 sync.RWMutex
+	static             []netip.Prefix
+	dynamic            []netip.Prefix
+	dynamicInitialized bool
 }
 
 func newIPAllowlist(cidrs []string) (*ipAllowlist, error) {
@@ -95,20 +97,27 @@ func (a *ipAllowlist) contains(ip string) bool {
 }
 
 // replaceDynamic atomically swaps ranges supplied by Gatehub while preserving
-// locally configured static bypasses.
-func (a *ipAllowlist) replaceDynamic(cidrs []string) error {
+// locally configured static bypasses. It reports the initial successful load
+// and subsequent set changes; order, duplicates and host bits are immaterial.
+func (a *ipAllowlist) replaceDynamic(cidrs []string) (bool, error) {
 	prefixes := make([]netip.Prefix, 0, len(cidrs))
 	for _, cidr := range cidrs {
 		prefix, err := netip.ParsePrefix(cidr)
 		if err != nil {
-			return fmt.Errorf("parse Gatehub trusted range %q: %w", cidr, err)
+			return false, fmt.Errorf("parse Gatehub trusted range %q: %w", cidr, err)
 		}
 		prefixes = append(prefixes, prefix.Masked())
 	}
+	slices.SortFunc(prefixes, func(a, b netip.Prefix) int { return a.Compare(b) })
+	prefixes = slices.Compact(prefixes)
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.dynamicInitialized && slices.Equal(a.dynamic, prefixes) {
+		return false, nil
+	}
 	a.dynamic = prefixes
-	a.mu.Unlock()
-	return nil
+	a.dynamicInitialized = true
+	return true, nil
 }
 
 type AlertRangeConfig struct {

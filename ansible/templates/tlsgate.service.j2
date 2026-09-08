@@ -16,7 +16,7 @@ Group=tlsgate
    existing inventories that set imap_backend/smtp_backend keep working. #}
 ExecStart=/usr/local/bin/tlsgate serve \
 {% for r in routes | default([{'listen': imap_listen | default('[::]:993'), 'backend': imap_backend}, {'listen': smtp_listen | default('[::]:465'), 'backend': smtp_backend}]) %}
-  --route {{ r.listen }}={{ r.backend }} \
+  --route {{ r.listen }}={{ r.backend }}{% if r.allow_unknown is defined %},allow-unknown={{ r.allow_unknown | bool | lower }}{% endif %}{% if r.proxy_protocol is defined %},proxy-protocol={{ r.proxy_protocol }}{% endif %} \
 {% endfor %}
   --db /var/lib/tlsgate/db.sqlite \
   --config {{ tlsgate_config | default('/etc/tlsgate/config.json') }} \

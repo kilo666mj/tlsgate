@@ -3,3 +3,6 @@ ansible/inventory
 ansible/group_vars/*.yml
 !ansible/group_vars/*.example.yml
 ansible/secrets/
+ansible/host_vars/*.yml
+!ansible/host_vars/*.example.yml
+docs/mx-https.md
