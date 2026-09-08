@@ -82,7 +82,28 @@ func newSMTPEventWriter(path, instance string) (*smtpEventWriter, error) {
 	}()
 	return w, nil
 }
+
+// Journal observations independently of JSONL configuration or queue health.
+func logSMTPEvent(status string, e smtpEvent) {
+	details := ""
+	if e.State != "" {
+		details += fmt.Sprintf(" state=%q", e.State)
+	}
+	if e.JA3 != "" {
+		details += fmt.Sprintf(" ja3=%q", e.JA3)
+	}
+	if e.JA4 != "" {
+		details += fmt.Sprintf(" ja4=%q", e.JA4)
+	}
+	if e.Error != "" {
+		details += fmt.Sprintf(" reason=%q", e.Error)
+	}
+	log.Printf("%s smtp event=%q connection_id=%q client=%q listener=%q backend=%q%s",
+		status, e.Type, e.ConnectionID, e.Client, e.Listener, e.Backend, details)
+}
+
 func (w *smtpEventWriter) emit(e smtpEvent) {
+	logSMTPEvent("OBSERVED", e)
 	if w == nil {
 		return
 	}
@@ -341,18 +362,27 @@ func handleSMTPConn(client net.Conn, backend string, port int, method Fingerprin
 			log.Printf("close SMTP client connection: %v", err)
 		}
 	}()
-	ip, _, _ := net.SplitHostPort(client.RemoteAddr().String())
-	if limiter != nil && !limiter.Allow(ip) {
-		log.Printf("[%s:%d] RATELIMIT dropping connection", ip, port)
-		return
-	}
 	id := connectionID()
 	base := smtpEvent{Timestamp: time.Now().UTC(), ConnectionID: id, Client: client.RemoteAddr().String(), Listener: client.LocalAddr().String(), Backend: backend}
+	ip, _, _ := net.SplitHostPort(client.RemoteAddr().String())
+	if limiter != nil && !limiter.Allow(ip) {
+		blocked := base
+		blocked.Type, blocked.State = "blocked", "rate_limit"
+		logSMTPEvent("BLOCKED", blocked)
+		return
+	}
 	start := base
 	start.Type = "start"
 	events.emit(start)
+	end := base
+	end.Type, end.State = "end", "observer_incomplete"
+	defer func() {
+		end.Timestamp = time.Now().UTC()
+		events.emit(end)
+	}()
 	upstream, err := net.DialTimeout("tcp", backend, 10*time.Second)
 	if err != nil {
+		end.Error = "backend_connect_failed"
 		log.Printf("[%s:%d] dial backend: %v", ip, port, err)
 		return
 	}
@@ -364,21 +394,19 @@ func handleSMTPConn(client net.Conn, backend string, port int, method Fingerprin
 	if sendProxyV2 {
 		h, e := proxyV2Header(client.RemoteAddr(), client.LocalAddr())
 		if e != nil {
+			end.Error = "proxy_header_failed"
 			return
 		}
 		_ = upstream.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if _, e = upstream.Write(h); e != nil {
+			end.Error = "proxy_header_write_failed"
 			return
 		}
 		_ = upstream.SetWriteDeadline(time.Time{})
 	}
 	o := &smtpObserver{method: method, events: events, base: base}
 	proxySMTPBidirectional(client, upstream, o)
-	end := base
 	end.State = o.state()
-	end.Type = "end"
-	end.Timestamp = time.Now().UTC()
-	events.emit(end)
 }
 
 func proxySMTPBidirectional(client, upstream net.Conn, o *smtpObserver) {

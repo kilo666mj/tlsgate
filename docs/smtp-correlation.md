@@ -4,6 +4,24 @@ SMTP mode observes STARTTLS ClientHellos without terminating TLS. It never
 applies the fingerprint approval/block database, and the correlation command
 never installs a block. Use its report to measure false-positive risk first.
 
+SMTP connections also produce normal service-journal entries prefixed
+`OBSERVED smtp`, with `event="start"`, `event="starttls"`,
+`event="fingerprint"`, or `event="end"`. They include a connection ID,
+client address/port, listener, and backend. STARTTLS entries carry
+`state="accepted"` or `state="refused"`; fingerprint entries include JA3 and
+JA4. End entries report the final observation state. Backend/PROXY-header
+setup failures end as `observer_incomplete` with a reason. Rate-limit
+rejections use `BLOCKED smtp` with `state="rate_limit"`.
+
+Journal logging works even without a JSONL event file and remains independent
+of the JSONL writer's queue health. It does not log SMTP commands, message
+content, or credentials. `OBSERVED` is an observation, not an approval or a
+pending enforcement decision. To follow SMTP entries:
+
+```sh
+sudo journalctl -fu tlsgate | grep --line-buffered ' smtp '
+```
+
 Configure a dedicated route and event file in the runtime JSON:
 
 ```json
