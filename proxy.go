@@ -79,7 +79,7 @@ func cmdServe(args []string) {
 	var routes routeConfigs
 	fs.Var(&routes, "route", "LISTEN=BACKEND[,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
 	dbPath := fs.String("db", defaultDB, "fingerprint database path")
-	configPath := fs.String("config", defaultConfig, "JSON config path for alerting")
+	configPath := fs.String("config", defaultConfig, "JSON config path")
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
 	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when the method or fingerprint format differs")
@@ -87,9 +87,16 @@ func cmdServe(args []string) {
 	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "on upgrade/shutdown, how long to wait for existing connections to finish (0 = forever)")
 	// ExitOnError: Parse exits on bad input, so this can only return nil.
 	_ = fs.Parse(args)
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if err := applyRuntimeConfig(fs, cfg, &routes, dbPath, allowUnknown, fingerprint, resetFingerprints, proxyProtocol, drainTimeout); err != nil {
+		log.Fatalf("load runtime config: %v", err)
+	}
 
 	if len(routes) == 0 {
-		log.Fatalf("no routes: pass at least one --route LISTEN=BACKEND")
+		log.Fatalf("no routes: configure routes or pass at least one --route LISTEN=BACKEND")
 	}
 	if *proxyProtocol != "off" && *proxyProtocol != "v2" {
 		log.Fatalf("invalid --proxy-protocol %q (want off or v2)", *proxyProtocol)
@@ -131,11 +138,6 @@ func cmdServe(args []string) {
 
 	if err := ensureDir(filepath.Dir(*dbPath)); err != nil {
 		log.Fatalf("create db dir: %v", err)
-	}
-
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("load config: %v", err)
 	}
 
 	st, err := newStoreWithLimit(*dbPath, cfg.MaxFingerprints)

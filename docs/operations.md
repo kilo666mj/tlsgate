@@ -78,11 +78,15 @@ Labels are operator notes, not identities. JA3 and JA4 describe a client
 implementation and algorithm set; multiple devices can share a fingerprint and
 an attacker can copy one.
 
-## Blocked range alerts
+## Runtime configuration and blocked range alerts
 
-`serve` reads optional alert configuration from
+`serve` reads runtime and alert configuration from
 `/var/lib/tlsgate/config.json`, or another path passed with
-`--config <path>`. If `alert_ranges` are configured, a blocked connection from
+`--config <path>`. Routes, the database path, fingerprint method, enrollment
+policy, PROXY protocol, fingerprint reset policy, and drain timeout can all be
+kept there. Explicit command-line flags override their JSON counterparts.
+
+If `alert_ranges` are configured, a blocked connection from
 a matching CIDR sends a Shoutrrr notification the first time each source IP is
 seen for that range. Alerts are deduplicated in SQLite, so repeated blocked
 attempts from the same IP/range do not spam the channel while its record is

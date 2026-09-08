@@ -13,10 +13,12 @@ routes:
 
 # JA4 is stable across TLS extension reordering. Changing methods later requires
 # reset_fingerprints: true for one deployment and re-enrollment of every client.
+database: /var/lib/tlsgate/db.sqlite
 fingerprint: ja4
 reset_fingerprints: false
 proxy_protocol: "off"
 allow_unknown: false
+drain_timeout: 1h
 
 max_fingerprints: 100000
 notification_urls: []

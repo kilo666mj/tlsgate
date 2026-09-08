@@ -36,8 +36,15 @@ const (
 )
 
 type AppConfig struct {
-	NotificationURLs []string         `json:"notification_urls"`
-	NotificationMode NotificationMode `json:"notification_mode"`
+	Routes            []RouteFileConfig `json:"routes"`
+	Database          string            `json:"database"`
+	Fingerprint       string            `json:"fingerprint"`
+	AllowUnknown      bool              `json:"allow_unknown"`
+	ResetFingerprints bool              `json:"reset_fingerprints"`
+	ProxyProtocol     string            `json:"proxy_protocol"`
+	DrainTimeout      string            `json:"drain_timeout"`
+	NotificationURLs  []string          `json:"notification_urls"`
+	NotificationMode  NotificationMode  `json:"notification_mode"`
 	// MaxFingerprints caps how many fingerprint entries are kept in the
 	// store, bounding disk growth from unauthenticated unknown clients.
 	// 0 applies defaultMaxFingerprints; -1 means unlimited. Approved entries

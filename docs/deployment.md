@@ -132,13 +132,19 @@ Append `allow-unknown=true|false` and/or `proxy-protocol=off|v2` to a route
 to override the global defaults for that listener. Existing `LISTEN=BACKEND`
 arguments retain their behavior. Overrides are independent of flag ordering.
 
-For strict mail filtering alongside HTTPS enrollment:
+Routes and runtime policy can live in the JSON config. For strict mail
+filtering alongside HTTPS enrollment:
 
-```bash
-tlsgate serve --fingerprint ja4 \
-  --route '[::]:993=127.0.0.1:10993' \
-  --route '[::]:465=127.0.0.1:10465' \
-  --route '[::]:443=127.0.0.1:1443,allow-unknown=true,proxy-protocol=v2'
+```json
+{
+  "database": "/var/lib/tlsgate/db.sqlite",
+  "fingerprint": "ja4",
+  "routes": [
+    {"listen": "[::]:993", "backend": "127.0.0.1:10993"},
+    {"listen": "[::]:465", "backend": "127.0.0.1:10465"},
+    {"listen": "[::]:443", "backend": "127.0.0.1:1443", "allow_unknown": true, "proxy_protocol": "v2"}
+  ]
+}
 ```
 
 The routes share the fingerprint database, Gatehub decisions, trusted source
@@ -147,10 +153,10 @@ routes to the same fingerprint. `allow-unknown=true` permits pending entries;
 it does not override an explicit block. A strict route still rejects a pending
 fingerprint first recorded by an enrollment route.
 
-Ansible route entries accept the corresponding `allow_unknown` boolean and
-`proxy_protocol` string. `tlsgate doctor` accepts the same route syntax and
-reports each listener's effective settings. Changing route flags requires a
-service restart; a graceful binary reload retains the existing arguments.
+Ansible writes these values into `/etc/tlsgate/config.json`; its systemd unit
+only selects that file. Command-line flags remain supported and override the
+corresponding JSON values, while command-line routes replace configured routes.
+`tlsgate doctor --config <path>` reports each listener's effective settings.
 
 ### nginx listener configuration
 

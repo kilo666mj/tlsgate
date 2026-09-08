@@ -1,4 +1,11 @@
 {
+  "routes": {{ routes | default([{'listen': imap_listen | default('[::]:993'), 'backend': imap_backend}, {'listen': smtp_listen | default('[::]:465'), 'backend': smtp_backend}]) | to_nice_json }},
+  "database": {{ database | default('/var/lib/tlsgate/db.sqlite') | to_json }},
+  "fingerprint": {{ fingerprint | default('ja3') | to_json }},
+  "allow_unknown": {{ allow_unknown | default(false) | bool | to_json }},
+  "reset_fingerprints": {{ reset_fingerprints | default(false) | bool | to_json }},
+  "proxy_protocol": {{ proxy_protocol | default('off') | to_json }},
+  "drain_timeout": {{ drain_timeout | default('1h') | to_json }},
   "notification_urls": {{ notification_urls | default([]) | to_nice_json }},
   "notification_mode": {{ notification_mode | default('failover') | to_json }},
   "max_fingerprints": {{ max_fingerprints | default(100000) | int }},

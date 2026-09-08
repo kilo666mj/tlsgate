@@ -27,11 +27,20 @@ func runDoctor(args []string, out io.Writer) error {
 	allowUnknown := fs.Bool("allow-unknown", false, "report enrollment mode")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method: ja3 or ja4")
 	proxyProtocol := fs.String("proxy-protocol", "off", "backend PROXY protocol: off or v2")
+	resetFingerprints := fs.Bool("reset-fingerprints", false, "report fingerprint reset policy")
+	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "report drain timeout")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := applyRuntimeConfig(fs, cfg, &routes, dbPath, allowUnknown, fingerprint, resetFingerprints, proxyProtocol, drainTimeout); err != nil {
+		return fmt.Errorf("load runtime config: %w", err)
 	}
 	method, err := ParseFingerprintMethod(*fingerprint)
 	if err != nil {
@@ -68,15 +77,12 @@ func runDoctor(args []string, out io.Writer) error {
 	} else {
 		return fmt.Errorf("inspect config: %w", err)
 	}
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
 	if err := validateDoctorConfig(cfg); err != nil {
 		return err
 	}
 
 	emit("fingerprint method: %s\n", method)
+	emit("drain timeout: %s\n", *drainTimeout)
 	emit("backend PROXY protocol: %s\n", *proxyProtocol)
 	if *allowUnknown {
 		emit("unknown fingerprints: allowed as pending (enrollment mode)\n")

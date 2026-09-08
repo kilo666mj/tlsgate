@@ -12,17 +12,7 @@ Type=notify
 NotifyAccess=all
 User=tlsgate
 Group=tlsgate
-{# routes: list of {listen, backend}. Falls back to the mail defaults so
-   existing inventories that set imap_backend/smtp_backend keep working. #}
-ExecStart=/usr/local/bin/tlsgate serve \
-{% for r in routes | default([{'listen': imap_listen | default('[::]:993'), 'backend': imap_backend}, {'listen': smtp_listen | default('[::]:465'), 'backend': smtp_backend}]) %}
-  --route {{ r.listen }}={{ r.backend }}{% if r.allow_unknown is defined %},allow-unknown={{ r.allow_unknown | bool | lower }}{% endif %}{% if r.proxy_protocol is defined %},proxy-protocol={{ r.proxy_protocol }}{% endif %} \
-{% endfor %}
-  --db /var/lib/tlsgate/db.sqlite \
-  --config {{ tlsgate_config | default('/etc/tlsgate/config.json') }} \
-  --fingerprint {{ fingerprint | default('ja3') }} \
-  --proxy-protocol {{ proxy_protocol | default('off') }} \
-  {% if reset_fingerprints | default(false) | bool %}--reset-fingerprints {% endif %}{% if allow_unknown | default(false) | bool %}--allow-unknown{% endif %}
+ExecStart=/usr/local/bin/tlsgate serve --config {{ tlsgate_config | default('/etc/tlsgate/config.json') }}
 
 # SIGHUP starts a graceful upgrade: tableflip re-execs the newly installed
 # binary and hands it the listening sockets, and this process keeps serving its
