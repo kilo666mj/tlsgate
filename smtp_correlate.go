@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -129,7 +130,7 @@ type fingerprintAggregate struct {
 	Unknown int    `json:"unknown"`
 }
 
-func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, listener string, tolerance time.Duration) (smtpSummary, error) {
+func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, listener string, tolerance time.Duration) (result smtpSummary, err error) {
 	if tolerance < 0 || tolerance > time.Minute {
 		return smtpSummary{}, fmt.Errorf("tolerance must be between zero and one minute")
 	}
@@ -173,7 +174,7 @@ func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, 
 	if err != nil {
 		return smtpSummary{}, err
 	}
-	defer db.Close()
+	defer closeWithError(&err, "close SMTP correlation database", db.Close)
 	if _, err = db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
 		return smtpSummary{}, err
 	}
@@ -184,7 +185,11 @@ func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, 
 	if err != nil {
 		return smtpSummary{}, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback SMTP correlation transaction: %w", rollbackErr))
+		}
+	}()
 	byQueue := map[string][]smtpVerdict{}
 	for _, v := range verdicts {
 		byQueue[v.Instance+"\x00"+v.QueueID] = append(byQueue[v.Instance+"\x00"+v.QueueID], v)
@@ -554,7 +559,7 @@ type smtpBatchScanner struct {
 	limitErr error
 }
 
-func newSMTPBatchScanner(path string) (*smtpBatchScanner, error) {
+func newSMTPBatchScanner(path string) (_ *smtpBatchScanner, err error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -566,7 +571,7 @@ func newSMTPBatchScanner(path string) (*smtpBatchScanner, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer closeWithError(&err, "close SMTP batch input", f.Close)
 	b, err := io.ReadAll(io.LimitReader(f, maxSMTPBatchBytes+1))
 	if err != nil {
 		return nil, err

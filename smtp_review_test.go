@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,15 +26,15 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer backend.Close()
+	t.Cleanup(func() { closeTestResource(t, "backend listener", backend.Close) })
 	backendDone := make(chan error, 1)
 	go func() {
-		backendDone <- func() error {
+		backendDone <- func() (err error) {
 			c, err := backend.Accept()
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer closeWithError(&err, "close test backend connection", c.Close)
 			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 			if _, err = io.WriteString(c, "220-mx.example\r\n220 ready\r\n"); err != nil {
 				return err
@@ -67,7 +68,7 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxy.Close()
+	t.Cleanup(func() { closeTestResource(t, "proxy listener", proxy.Close) })
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	w, err := newSMTPEventWriter(path, "review-mx")
 	if err != nil {
@@ -86,7 +87,7 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	t.Cleanup(func() { closeTestResource(t, "client connection", c.Close) })
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 	r := bufio.NewReader(c)
 	readReply := func(want string) {
@@ -138,7 +139,7 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	t.Cleanup(func() { closeTestResource(t, "SMTP event input", f.Close) })
 	d := json.NewDecoder(f)
 	found := false
 	for {
@@ -157,6 +158,13 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("real STARTTLS handshake produced no fingerprint")
+	}
+}
+
+func closeTestResource(t *testing.T, name string, closeFn func() error) {
+	t.Helper()
+	if err := closeFn(); err != nil && !errors.Is(err, net.ErrClosed) {
+		t.Errorf("close %s: %v", name, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -74,5 +75,54 @@ func TestSMTPReportRejectsInvalidWindow(t *testing.T) {
 	_, err := readSMTPReport(path, cfg, "mx", "[::]:25", "2026-09-08T01:00:00Z", "2026-09-08T00:00:00Z", time.Now().UTC().Format(time.RFC3339Nano))
 	if err == nil {
 		t.Fatal("reversed coverage accepted")
+	}
+}
+
+func TestSMTPReportWireGolden(t *testing.T) {
+	dir := t.TempDir()
+	summaryPath := filepath.Join(dir, "summary.json")
+	summary := smtpSummary{
+		Messages: 2, Matched: 1, Unmatched: 1, Spam: 1, Connections: 2,
+		STARTTLS: 1, NoObservedTLS: 1, TLSMessages: 1, PlaintextMessages: 1,
+		Reasons:      []reasonCount{{Reason: "message_before_observed_starttls", Count: 1}},
+		Fingerprints: []fingerprintAggregate{{JA4: "t13d1516h2_abc_def", Spam: 1}},
+		Records: []smtpCorrelation{{
+			QueueID: "Q1", Classification: "spam", JA3: "0123456789abcdef0123456789abcdef",
+			JA4: "t13d1516h2_abc_def", Reason: "matched", ConnectionID: "c1",
+			Client: "192.0.2.1:12345", Listener: "[::]:25", Action: "add header",
+			VerdictAt: "2026-09-08T11:00:02Z", MessageAt: "2026-09-08T11:00:01Z",
+			SessionStart: "2026-09-08T11:00:00Z", Symbols: []string{"BAYES_SPAM"},
+			Score: 12.5, Transport: "starttls",
+		}},
+	}
+	for i := 1; i < 258; i++ {
+		summary.Records = append(summary.Records, smtpCorrelation{
+			QueueID: fmt.Sprintf("Q%d", i+1), Classification: "unknown", Reason: "no_verdict",
+			MessageAt: "2026-09-08T11:00:01Z", Transport: "unknown",
+		})
+	}
+	encodedSummary, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(summaryPath, encodedSummary, 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := readSMTPReport(summaryPath, controlplane.Config{
+		URL: "https://gatehub.example", InstanceID: "mail-tls", Token: "token",
+	}, "mx-public-smtp", "[::]:25", "2026-09-07T12:00:00Z", "2026-09-08T11:58:00Z", "2026-09-08T12:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/smtp-report-wire.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("SMTP report wire format changed; update both Gatehub and the golden fixture\ngot replay_id=%s", report.ReplayID)
 	}
 }

@@ -53,7 +53,11 @@ func newSMTPEventWriter(path, instance string) (*smtpEventWriter, error) {
 	w := &smtpEventWriter{instance: instance, ch: make(chan smtpEvent, 1024), done: make(chan struct{})}
 	go func() {
 		defer close(w.done)
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Printf("close SMTP event log: %v", err)
+			}
+		}()
 		failed := false
 		for e := range w.ch {
 			if failed {
@@ -332,7 +336,11 @@ func clientHelloFromBytes(raw []byte) ([]byte, bool, error) {
 }
 
 func handleSMTPConn(client net.Conn, backend string, port int, method FingerprintMethod, limiter *ratelimit.Limiter, sendProxyV2 bool, events *smtpEventWriter) {
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("close SMTP client connection: %v", err)
+		}
+	}()
 	ip, _, _ := net.SplitHostPort(client.RemoteAddr().String())
 	if limiter != nil && !limiter.Allow(ip) {
 		log.Printf("[%s:%d] RATELIMIT dropping connection", ip, port)
@@ -348,7 +356,11 @@ func handleSMTPConn(client net.Conn, backend string, port int, method Fingerprin
 		log.Printf("[%s:%d] dial backend: %v", ip, port, err)
 		return
 	}
-	defer upstream.Close()
+	defer func() {
+		if err := upstream.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("close SMTP upstream connection: %v", err)
+		}
+	}()
 	if sendProxyV2 {
 		h, e := proxyV2Header(client.RemoteAddr(), client.LocalAddr())
 		if e != nil {

@@ -73,7 +73,7 @@ func cmdReportSMTP(args []string) {
 	fmt.Printf("uploaded SMTP report replay_id=%s listener=%s\n", report.ReplayID, report.Listener)
 }
 
-func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener, start, end, generated string) (smtpReportEnvelope, error) {
+func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener, start, end, generated string) (_ smtpReportEnvelope, err error) {
 	if err := cfg.Validate(); err != nil {
 		return smtpReportEnvelope{}, err
 	}
@@ -109,7 +109,7 @@ func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener
 	if err != nil {
 		return smtpReportEnvelope{}, err
 	}
-	defer f.Close()
+	defer closeWithError(&err, "close SMTP report", f.Close)
 	info, err := f.Stat()
 	if err != nil {
 		return smtpReportEnvelope{}, err
@@ -161,7 +161,7 @@ func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener
 	return report, nil
 }
 
-func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpReportEnvelope, client *http.Client) error {
+func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpReportEnvelope, client *http.Client) (err error) {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpR
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close Gatehub SMTP report response", resp.Body.Close)
 	if resp.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("POST SMTP report returned %s (instance %q not registered with gatehub?)", resp.Status, cfg.InstanceID)
 	}
