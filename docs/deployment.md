@@ -128,7 +128,8 @@ disabled by default. Enable it only for backends that expect PROXY protocol.
 
 ### Different policies per route
 
-Append `allow-unknown=true|false` and/or `proxy-protocol=off|v2` to a route
+Append `protocol=tls|smtp`, `allow-unknown=true|false`, and/or
+`proxy-protocol=off|v2` to a route
 to override the global defaults for that listener. Existing `LISTEN=BACKEND`
 arguments retain their behavior. Overrides are independent of flag ordering.
 

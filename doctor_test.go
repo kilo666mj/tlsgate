@@ -61,57 +61,37 @@ func TestDoctorRejectsInvalidProxyProtocol(t *testing.T) {
 	}
 }
 
-func TestDoctorUsesRuntimeSettingsFromConfig(t *testing.T) {
+func TestDoctorUsesSMTPRuntimeConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	dbPath := filepath.Join(dir, "configured.db")
-	data := []byte(`{
-		"routes":[{"listen":"[::]:2443","backend":"127.0.0.1:1443","allow_unknown":true,"proxy_protocol":"v2"}],
-		"database":"` + dbPath + `",
-		"fingerprint":"ja4",
-		"drain_timeout":"45m"
-	}`)
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+	data := []byte(`{"routes":[{"listen":"127.0.0.1:2525","backend":"127.0.0.1:10025","protocol":"smtp","proxy_protocol":"v2"}],"database":"` + dbPath + `","fingerprint":"ja4","drain_timeout":"45m","smtp_events":"` + filepath.Join(dir, "events.jsonl") + `","smtp_instance":"mx-public"}`)
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	if err := runDoctor([]string{"--config", configPath}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"database: " + dbPath,
-		"fingerprint method: ja4",
-		"drain timeout: 45m0s",
-		"route: [::]:2443 -> 127.0.0.1:1443 (allow-unknown=true, proxy-v2=true)",
-	} {
+	for _, want := range []string{"database: " + dbPath, "fingerprint method: ja4", "drain timeout: 45m0s", "SMTP events: " + filepath.Join(dir, "events.jsonl") + " (instance mx-public)", "protocol=smtp, observation-only, proxy-v2=true"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q:\n%s", want, &out)
 		}
 	}
 }
 
-func TestDoctorCommandLineOverridesRuntimeConfig(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"fingerprint":"ja3","allow_unknown":true,"proxy_protocol":"v2"}`), 0o600); err != nil {
+func TestDoctorCLIOverridesSMTPRuntimeConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"routes":[{"listen":"127.0.0.1:2525","backend":"127.0.0.1:10025","protocol":"smtp"}],"smtp_events":"configured.jsonl","smtp_instance":"configured"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err := runDoctor([]string{
-		"--config", configPath,
-		"--fingerprint", "ja4",
-		"--proxy-protocol", "off",
-		"--route", "[::]:2993=127.0.0.1:10993,allow-unknown=false",
-	}, &out)
+	err := runDoctor([]string{"--config", configPath, "--smtp-events", "cli.jsonl", "--smtp-instance", "cli"}, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"fingerprint method: ja4",
-		"backend PROXY protocol: off",
-		"route: [::]:2993 -> 127.0.0.1:10993 (allow-unknown=false, proxy-v2=false)",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("missing %q:\n%s", want, &out)
-		}
+	if !strings.Contains(out.String(), "SMTP events: cli.jsonl (instance cli)") {
+		t.Fatalf("CLI override missing:\n%s", &out)
 	}
 }

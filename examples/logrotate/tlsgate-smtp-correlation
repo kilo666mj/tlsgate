@@ -1,0 +1,22 @@
+/var/lib/tlsgate/smtp-events.jsonl {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    nocompress
+    su tlsgate tlsgate
+    create 0600 tlsgate tlsgate
+    sharedscripts
+    postrotate
+        /usr/bin/systemctl reload tlsgate.service
+    endscript
+}
+
+/var/lib/docker/volumes/mailcowdockerized_rspamd-vol-1/_data/tlsgate/verdicts.jsonl {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    nocompress
+    create 0640 101 102
+}

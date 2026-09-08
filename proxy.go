@@ -77,13 +77,15 @@ const (
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	var routes routeConfigs
-	fs.Var(&routes, "route", "LISTEN=BACKEND[,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
+	fs.Var(&routes, "route", "LISTEN=BACKEND[,protocol=tls|smtp][,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
 	dbPath := fs.String("db", defaultDB, "fingerprint database path")
 	configPath := fs.String("config", defaultConfig, "JSON config path")
 	allowUnknown := fs.Bool("allow-unknown", false, "allow unknown fingerprints through (default: block and record)")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method used as the allow/block key: ja3 or ja4")
 	resetFingerprints := fs.Bool("reset-fingerprints", false, "purge stored fingerprints when the method or fingerprint format differs")
 	proxyProtocol := fs.String("proxy-protocol", "off", "PROXY protocol sent to backends: off or v2")
+	smtpEventsPath := fs.String("smtp-events", "", "append SMTP observation events as JSONL (requires protocol=smtp)")
+	smtpInstance := fs.String("smtp-instance", "", "stable namespace for SMTP events")
 	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "on upgrade/shutdown, how long to wait for existing connections to finish (0 = forever)")
 	// ExitOnError: Parse exits on bad input, so this can only return nil.
 	_ = fs.Parse(args)
@@ -91,7 +93,7 @@ func cmdServe(args []string) {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	if err := applyRuntimeConfig(fs, cfg, &routes, dbPath, allowUnknown, fingerprint, resetFingerprints, proxyProtocol, drainTimeout); err != nil {
+	if err := applyRuntimeConfig(fs, cfg, &routes, dbPath, allowUnknown, fingerprint, resetFingerprints, proxyProtocol, drainTimeout, smtpEventsPath, smtpInstance); err != nil {
 		log.Fatalf("load runtime config: %v", err)
 	}
 
@@ -100,6 +102,27 @@ func cmdServe(args []string) {
 	}
 	if *proxyProtocol != "off" && *proxyProtocol != "v2" {
 		log.Fatalf("invalid --proxy-protocol %q (want off or v2)", *proxyProtocol)
+	}
+	if *smtpEventsPath != "" && *smtpInstance == "" {
+		log.Fatal("--smtp-instance is required with --smtp-events")
+	}
+	hasSMTP := false
+	for _, r := range routes {
+		if r.protocol == "smtp" {
+			hasSMTP = true
+		}
+	}
+	if *smtpEventsPath != "" && !hasSMTP {
+		log.Fatal("--smtp-events requires at least one protocol=smtp route")
+	}
+	var smtpEvents *smtpEventWriter
+	if *smtpEventsPath != "" {
+		var err error
+		smtpEvents, err = newSMTPEventWriter(*smtpEventsPath, *smtpInstance)
+		if err != nil {
+			log.Fatalf("open SMTP events: %v", err)
+		}
+		defer smtpEvents.Close()
 	}
 	log.Printf("tlsgate %s starting", version)
 
@@ -234,9 +257,21 @@ func cmdServe(args []string) {
 			log.Fatalf("listen %s: %v", rt.Listen, err)
 		}
 		listeners = append(listeners, ln)
-		log.Printf("listening on %s -> %s (allow-unknown=%t, proxy-v2=%t)", rt.Listen, rt.Backend, !blockUnknown, sendProxyV2)
+		protocol := rt.protocol
+		if protocol == "" {
+			protocol = "tls"
+		}
+		if protocol == "smtp" {
+			log.Printf("listening on %s -> %s (protocol=smtp, observation-only, proxy-v2=%t)", rt.Listen, rt.Backend, sendProxyV2)
+		} else {
+			log.Printf("listening on %s -> %s (protocol=tls, allow-unknown=%t, proxy-v2=%t)", rt.Listen, rt.Backend, !blockUnknown, sendProxyV2)
+		}
 		proxyServer.Serve(ln, rt.Route, func(conn net.Conn, route gateproxy.Route) {
-			handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow, sendProxyV2)
+			if protocol == "smtp" {
+				handleSMTPConn(conn, route.Backend, route.Port, method, limiter, sendProxyV2, smtpEvents)
+			} else {
+				handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow, sendProxyV2)
+			}
 		})
 	}
 

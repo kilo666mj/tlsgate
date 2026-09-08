@@ -14,6 +14,7 @@ type routeConfig struct {
 	gateproxy.Route
 	allowUnknown  *bool
 	proxyProtocol string
+	protocol      string
 }
 
 func (r routeConfig) policy(allowUnknown bool, proxyProtocol string) (blockUnknown, sendProxyV2 bool) {
@@ -55,6 +56,11 @@ func (rs *routeConfigs) Set(value string) error {
 				return fmt.Errorf("route proxy-protocol must be off or v2, got %q", value)
 			}
 			r.proxyProtocol = value
+		case "protocol":
+			if value != "tls" && value != "smtp" {
+				return fmt.Errorf("route protocol must be tls or smtp, got %q", value)
+			}
+			r.protocol = value
 		default:
 			return fmt.Errorf("unknown route option %q", key)
 		}
@@ -77,6 +83,9 @@ func (rs *routeConfigs) String() string {
 		}
 		if r.proxyProtocol != "" {
 			value += ",proxy-protocol=" + r.proxyProtocol
+		}
+		if r.protocol != "" {
+			value += ",protocol=" + r.protocol
 		}
 		values = append(values, value)
 	}

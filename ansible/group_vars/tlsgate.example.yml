@@ -5,6 +5,11 @@ routes:
     backend: "127.0.0.1:10993"
   - listen: "[::]:465"
     backend: "127.0.0.1:10465"
+  # Port 25 observation example:
+  # - listen: "[::]:25"
+  #   backend: "127.0.0.1:10025"
+  #   protocol: smtp
+  #   proxy_protocol: v2
   # Example: enroll HTTPS separately while mail remains strict.
   # - listen: "[::]:443"
   #   backend: "127.0.0.1:1443"
@@ -19,6 +24,8 @@ reset_fingerprints: false
 proxy_protocol: "off"
 allow_unknown: false
 drain_timeout: 1h
+smtp_events: ""
+smtp_instance: ""
 
 max_fingerprints: 100000
 notification_urls: []

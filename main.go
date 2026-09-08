@@ -23,6 +23,8 @@ Commands:
   serve    Start the proxy
   list     List all fingerprints
   correlate Correlate a fingerprint with service logs
+  correlate-smtp Correlate SMTP TLS events with Postfix and verdict logs
+  report-smtp Upload a bounded SMTP correlation report to Gatehub
   approve  Approve a fingerprint
   block    Block a fingerprint
   label    Set a label on a fingerprint
@@ -44,6 +46,10 @@ func main() {
 		cmdList(os.Args[2:])
 	case "correlate":
 		cmdCorrelate(os.Args[2:])
+	case "correlate-smtp":
+		cmdCorrelateSMTP(os.Args[2:])
+	case "report-smtp":
+		cmdReportSMTP(os.Args[2:])
 	case "approve":
 		cmdApprove(os.Args[2:])
 	case "block":

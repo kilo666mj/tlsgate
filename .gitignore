@@ -6,3 +6,6 @@ ansible/secrets/
 ansible/host_vars/*.yml
 !ansible/host_vars/*.example.yml
 docs/mx-https.md
+
+__pycache__/
+*.pyc

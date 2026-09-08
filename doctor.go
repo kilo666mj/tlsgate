@@ -21,12 +21,14 @@ func runDoctor(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var routes routeConfigs
-	fs.Var(&routes, "route", "LISTEN=BACKEND[,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
+	fs.Var(&routes, "route", "LISTEN=BACKEND[,protocol=tls|smtp][,allow-unknown=true|false][,proxy-protocol=off|v2], repeatable")
 	dbPath := fs.String("db", defaultDB, "fingerprint database path")
 	configPath := fs.String("config", defaultConfig, "JSON config path")
 	allowUnknown := fs.Bool("allow-unknown", false, "report enrollment mode")
 	fingerprint := fs.String("fingerprint", string(MethodJA3), "fingerprint method: ja3 or ja4")
 	proxyProtocol := fs.String("proxy-protocol", "off", "backend PROXY protocol: off or v2")
+	smtpEvents := fs.String("smtp-events", "", "SMTP observation event JSONL")
+	smtpInstance := fs.String("smtp-instance", "", "stable SMTP event namespace")
 	resetFingerprints := fs.Bool("reset-fingerprints", false, "report fingerprint reset policy")
 	drainTimeout := fs.Duration("drain-timeout", defaultDrainTimeout, "report drain timeout")
 	if err := fs.Parse(args); err != nil {
@@ -39,7 +41,7 @@ func runDoctor(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if err := applyRuntimeConfig(fs, cfg, &routes, dbPath, allowUnknown, fingerprint, resetFingerprints, proxyProtocol, drainTimeout); err != nil {
+	if err := applyRuntimeConfig(fs, cfg, &routes, dbPath, allowUnknown, fingerprint, resetFingerprints, proxyProtocol, drainTimeout, smtpEvents, smtpInstance); err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
 	method, err := ParseFingerprintMethod(*fingerprint)
@@ -48,6 +50,18 @@ func runDoctor(args []string, out io.Writer) error {
 	}
 	if *proxyProtocol != "off" && *proxyProtocol != "v2" {
 		return fmt.Errorf("invalid --proxy-protocol %q (want off or v2)", *proxyProtocol)
+	}
+	hasSMTP := false
+	for _, r := range routes {
+		if r.protocol == "smtp" {
+			hasSMTP = true
+		}
+	}
+	if *smtpEvents != "" && *smtpInstance == "" {
+		return fmt.Errorf("--smtp-instance is required with --smtp-events")
+	}
+	if *smtpEvents != "" && !hasSMTP {
+		return fmt.Errorf("--smtp-events requires at least one protocol=smtp route")
 	}
 
 	// A diagnostic whose output is truncated is worse than no diagnostic, so
@@ -83,6 +97,11 @@ func runDoctor(args []string, out io.Writer) error {
 
 	emit("fingerprint method: %s\n", method)
 	emit("drain timeout: %s\n", *drainTimeout)
+	if *smtpEvents != "" {
+		emit("SMTP events: %s (instance %s)\n", *smtpEvents, *smtpInstance)
+	} else {
+		emit("SMTP events: disabled\n")
+	}
 	emit("backend PROXY protocol: %s\n", *proxyProtocol)
 	if *allowUnknown {
 		emit("unknown fingerprints: allowed as pending (enrollment mode)\n")
@@ -98,11 +117,19 @@ func runDoctor(args []string, out io.Writer) error {
 		emit("control plane: disabled\n")
 	}
 	if len(routes) == 0 {
-		emit("routes: none supplied; pass the same --route flags used by serve\n")
+		emit("routes: none configured; configure routes or pass --route\n")
 	} else {
 		for _, route := range routes {
 			block, proxy := route.policy(*allowUnknown, *proxyProtocol)
-			emit("route: %s -> %s (allow-unknown=%t, proxy-v2=%t)\n", route.Listen, route.Backend, !block, proxy)
+			protocol := route.protocol
+			if protocol == "" {
+				protocol = "tls"
+			}
+			if protocol == "smtp" {
+				emit("route: %s -> %s (protocol=smtp, observation-only, proxy-v2=%t)\n", route.Listen, route.Backend, proxy)
+			} else {
+				emit("route: %s -> %s (allow-unknown=%t, proxy-v2=%t)\n", route.Listen, route.Backend, !block, proxy)
+			}
 		}
 	}
 	return writeErr

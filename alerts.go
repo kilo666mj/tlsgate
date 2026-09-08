@@ -43,6 +43,8 @@ type AppConfig struct {
 	ResetFingerprints bool              `json:"reset_fingerprints"`
 	ProxyProtocol     string            `json:"proxy_protocol"`
 	DrainTimeout      string            `json:"drain_timeout"`
+	SMTPEvents        string            `json:"smtp_events"`
+	SMTPInstance      string            `json:"smtp_instance"`
 	NotificationURLs  []string          `json:"notification_urls"`
 	NotificationMode  NotificationMode  `json:"notification_mode"`
 	// MaxFingerprints caps how many fingerprint entries are kept in the

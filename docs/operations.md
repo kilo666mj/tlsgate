@@ -83,8 +83,9 @@ an attacker can copy one.
 `serve` reads runtime and alert configuration from
 `/var/lib/tlsgate/config.json`, or another path passed with
 `--config <path>`. Routes, the database path, fingerprint method, enrollment
-policy, PROXY protocol, fingerprint reset policy, and drain timeout can all be
-kept there. Explicit command-line flags override their JSON counterparts.
+policy, PROXY protocol, fingerprint reset policy, drain timeout, and SMTP event
+settings can all be kept there. Explicit command-line flags override their JSON
+counterparts.
 
 If `alert_ranges` are configured, a blocked connection from
 a matching CIDR sends a Shoutrrr notification the first time each source IP is
@@ -92,7 +93,7 @@ seen for that range. Alerts are deduplicated in SQLite, so repeated blocked
 attempts from the same IP/range do not spam the channel while its record is
 retained. The newest 10,000 pairs are kept; evicted pairs can notify again.
 
-Ansible deploys this config when `alert_ranges` is defined. Prefer the
+Ansible always deploys this runtime config. Prefer the
 router-advertised IPv6 delegated prefix over the narrower `/64` shown on a
 single host interface.
 

@@ -133,6 +133,8 @@ Docker, and PROXY protocol configuration.
 - [Deployment](docs/deployment.md)
 - [Operations](docs/operations.md) — fingerprint management, alerts, Gatehub
   sync, storage limits, logs, and enrollment
+- [SMTP TLS correlation](docs/smtp-correlation.md) — observe STARTTLS and join
+  fingerprints to explicit spam/ham verdicts in a report-only workflow
 - [Repository guidance](AGENTS.md)
 
 ## License
