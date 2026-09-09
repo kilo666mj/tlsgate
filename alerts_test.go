@@ -43,6 +43,23 @@ func TestLoadConfigAppliesBoundedDefault(t *testing.T) {
 	if cfg.MaxFingerprints != defaultMaxFingerprints {
 		t.Fatalf("MaxFingerprints = %d, want %d", cfg.MaxFingerprints, defaultMaxFingerprints)
 	}
+	if cfg.MaxConnections != defaultMaxConnections || cfg.ConnectionRate != defaultConnectionRate || cfg.ConnectionBurst != defaultConnectionBurst {
+		t.Fatalf("connection defaults = %d, %g, %d", cfg.MaxConnections, cfg.ConnectionRate, cfg.ConnectionBurst)
+	}
+}
+
+func TestLoadConfigConnectionLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"max_concurrent_connections":512,"connection_rate_per_ip":2.5,"connection_burst_per_ip":80,"metrics_listen":"127.0.0.1:9192"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxConnections != 512 || cfg.ConnectionRate != 2.5 || cfg.ConnectionBurst != 80 || cfg.MetricsListen != "127.0.0.1:9192" {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
 }
 
 func TestLoadConfigAllowsExplicitUnlimitedStore(t *testing.T) {
