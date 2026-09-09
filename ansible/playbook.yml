@@ -51,6 +51,32 @@
         - tlsgate_node_host is defined
       changed_when: true
 
+    - name: Register additional TLSGate nodes in Gatehub
+      delegate_to: gatehub-control
+      become: true
+      no_log: true
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/gatehub
+          - register-node
+          - --db
+          - /var/lib/gatehub/gatehub.sqlite
+          - --id
+          - "{{ item.config_data.control_plane.instance_id }}"
+          - --kind
+          - tlsgate
+          - --host
+          - "{{ item.node_host }}"
+          - --allowed-cert-name
+          - "{{ item.allowed_cert_name }}"
+          - --token-file
+          - '-'
+        stdin: "{{ item.config_data.control_plane.token }}"
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: true
+
     # Describe the checkout so a deployed host reports what it is actually
     # running. Without this the binary keeps main.version's "dev" default, and
     # `tlsgate version` on the target tells you nothing about which build it has.
@@ -107,6 +133,17 @@
         owner: root
         group: tlsgate
 
+    - name: Create additional TLSGate data directories
+      file:
+        path: "{{ item.config_data.database | dirname }}"
+        state: directory
+        mode: '0750'
+        owner: tlsgate
+        group: tlsgate
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+
     - name: Install gatehub server CA
       copy:
         src: "{{ control_plane_ca_src }}"
@@ -129,6 +166,17 @@
         group: tlsgate
       notify: Restart tlsgate
 
+    - name: Deploy additional TLSGate configs
+      no_log: true
+      copy:
+        content: "{{ item.config_data | to_nice_json }}\n"
+        dest: "{{ item.config }}"
+        mode: '0640'
+        owner: root
+        group: tlsgate
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      notify: Restart additional tlsgate instances
+
     - name: Copy binary
       copy:
         src: /tmp/tlsgate
@@ -145,11 +193,40 @@
         - Reload systemd
         - Restart tlsgate
 
+    - name: Deploy additional TLSGate systemd services
+      template:
+        src: tlsgate.service.j2
+        dest: "/etc/systemd/system/{{ item.name }}.service"
+        mode: '0644'
+      vars:
+        tlsgate_config: "{{ item.config }}"
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify:
+        - Reload systemd
+        - Restart additional tlsgate instances
+
+    # Apply listener removals to the primary process before an additional
+    # instance attempts to bind its routes. Handlers run synchronously and in
+    # declaration order, so the primary releases the socket first.
+    - name: Apply TLSGate listener changes before starting instances
+      ansible.builtin.meta: flush_handlers
+
     - name: Enable and start tlsgate
       systemd:
         name: tlsgate
         enabled: true
         state: started
+
+    - name: Enable and start additional TLSGate instances
+      systemd:
+        name: "{{ item.name }}"
+        enabled: true
+        state: started
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
 
   handlers:
     - name: Reload systemd
@@ -171,5 +248,11 @@
       ansible.builtin.command:
         cmd: "systemctl {{ 'restart' if hard_restart | default(false) | bool else 'reload-or-restart' }} tlsgate"
       changed_when: true
-      async: 45
-      poll: 0
+
+    - name: Restart additional tlsgate instances
+      ansible.builtin.command:
+        cmd: "systemctl reload-or-restart {{ item.name }}"
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: true

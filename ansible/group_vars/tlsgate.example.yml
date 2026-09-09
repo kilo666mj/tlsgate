@@ -40,3 +40,7 @@ notification_mode: failover
 approve_ranges: []
 alert_ranges: []
 control_plane: {}
+
+# Optional additional isolated processes on the same host. Each gets an
+# independent connection budget, database, metrics endpoint, and Gatehub node.
+tlsgate_extra_instances: []

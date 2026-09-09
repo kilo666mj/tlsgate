@@ -29,8 +29,8 @@ TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 
-# Headroom above 2x maxConcurrentConns (1024) for client+backend sockets
-# plus the SQLite database, WAL, and journal handles.
+# Headroom above twice the default global connection cap (1024) for
+# client+backend sockets plus the SQLite database, WAL, and journal handles.
 LimitNOFILE=8192
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
