@@ -159,6 +159,22 @@ only selects that file. Command-line flags remain supported and override the
 corresponding JSON values, while command-line routes replace configured routes.
 `tlsgate doctor --config <path>` reports each listener's effective settings.
 
+### Isolating routes in additional processes
+
+Set `tlsgate_extra_instances` when routes on one host need independent global
+connection budgets, databases, metrics endpoints, or Gatehub identities. The
+playbook registers each node, writes its config and systemd unit, and reloads
+the primary service before starting an additional service that takes ownership
+of a removed listener. Keep every listener unique across instances.
+
+An instance entry contains `name`, `config`, `node_host`,
+`allowed_cert_name`, and a complete `config_data` mapping. Its database parent
+directory is created automatically. Secrets may reference protected inventory
+variables; the config deployment and registration tasks suppress their output.
+The first split can require `hard_restart: true` when a previous tableflip
+parent is still draining and prevents another handoff. This interrupts active
+connections, so schedule and approve that transition explicitly.
+
 ### nginx listener configuration
 
 For nginx, the corresponding listener and real-IP configuration is typically:
