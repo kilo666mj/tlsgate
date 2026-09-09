@@ -15,6 +15,7 @@ type routeConfig struct {
 	allowUnknown  *bool
 	proxyProtocol string
 	protocol      string
+	maxConcurrent int
 }
 
 func (r routeConfig) policy(allowUnknown bool, proxyProtocol string) (blockUnknown, sendProxyV2 bool) {
@@ -61,6 +62,12 @@ func (rs *routeConfigs) Set(value string) error {
 				return fmt.Errorf("route protocol must be tls or smtp, got %q", value)
 			}
 			r.protocol = value
+		case "max-concurrent":
+			n, err := strconv.Atoi(value)
+			if err != nil || n <= 0 {
+				return fmt.Errorf("route max-concurrent must be a positive integer, got %q", value)
+			}
+			r.maxConcurrent = n
 		default:
 			return fmt.Errorf("unknown route option %q", key)
 		}
@@ -86,6 +93,9 @@ func (rs *routeConfigs) String() string {
 		}
 		if r.protocol != "" {
 			value += ",protocol=" + r.protocol
+		}
+		if r.maxConcurrent != 0 {
+			value += ",max-concurrent=" + strconv.Itoa(r.maxConcurrent)
 		}
 		values = append(values, value)
 	}

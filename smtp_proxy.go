@@ -14,8 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/kilo666mj/gatekit/ratelimit"
 )
 
 type smtpEvent struct {
@@ -356,7 +354,7 @@ func clientHelloFromBytes(raw []byte) ([]byte, bool, error) {
 	}
 }
 
-func handleSMTPConn(client net.Conn, backend string, port int, method FingerprintMethod, limiter *ratelimit.Limiter, sendProxyV2 bool, events *smtpEventWriter) {
+func handleSMTPConn(client net.Conn, backend string, port int, method FingerprintMethod, limiter connectionLimiter, sendProxyV2 bool, events *smtpEventWriter) {
 	defer func() {
 		if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Printf("close SMTP client connection: %v", err)
@@ -382,6 +380,7 @@ func handleSMTPConn(client net.Conn, backend string, port int, method Fingerprin
 	}()
 	upstream, err := net.DialTimeout("tcp", backend, 10*time.Second)
 	if err != nil {
+		recordBackendFailure(limiter)
 		end.Error = "backend_connect_failed"
 		log.Printf("[%s:%d] dial backend: %v", ip, port, err)
 		return

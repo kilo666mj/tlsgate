@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,23 +37,15 @@ const maxClientHello = 64 * 1024
 // IDLE sessions are not severed mid-wait.
 const idleTimeout = 35 * time.Minute
 
-// Per-source-IP connection rate limit. Generous enough that legitimate
+// Default per-source-IP connection rate limit. Generous enough that legitimate
 // clients (including many devices behind a single NAT address) never hit
 // it, while throttling a flood of randomized ClientHellos that would
-// otherwise grow the fingerprint store unbounded. rateLimitTTL must be
-// >= connBurstPerIP/connRatePerIP so idle eviction only drops full buckets.
+// otherwise grow the fingerprint store unbounded. The five-minute bucket TTL
+// comfortably exceeds the time required to refill the default burst.
 const (
-	connRatePerIP   = 1.0 // tokens (connections) per second, sustained
-	connBurstPerIP  = 120 // tolerated burst before throttling kicks in
 	rateLimitTTL    = 5 * time.Minute
 	rateSweepPeriod = time.Minute
 )
-
-// maxConcurrentConns caps connections processed at once across all
-// listeners, bounding goroutines, file descriptors, and backend dials so a
-// distributed flood cannot exhaust them. Each connection costs ~2 fds; keep
-// LimitNOFILE in the systemd unit comfortably above 2x this value.
-const maxConcurrentConns = 1024
 
 // fingerprintPrunePeriod is how often the store is trimmed back to the
 // configured max_fingerprints cap, if one is set.
@@ -239,14 +232,35 @@ func cmdServe(args []string) {
 
 	// One limiter shared across all listeners so a source IP's budget
 	// spans every route combined rather than doubling per port.
-	limiter := ratelimit.New(connRatePerIP, connBurstPerIP, rateLimitTTL)
+	limiter := ratelimit.New(cfg.ConnectionRate, float64(cfg.ConnectionBurst), rateLimitTTL)
 	go limiter.RunSweeper(rateSweepPeriod, bgCtx.Done())
+	metrics := newTrafficMetrics()
+	var listeners []net.Listener
+	var metricsServer *http.Server
+	if cfg.MetricsListen != "" {
+		ln, err := process.Listen("tcp", cfg.MetricsListen)
+		if err != nil {
+			log.Fatalf("listen metrics %s: %v", cfg.MetricsListen, err)
+		}
+		listeners = append(listeners, ln)
+		metricsServer = &http.Server{Handler: metrics, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			if err := metricsServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				log.Printf("metrics server: %v", err)
+			}
+		}()
+		log.Printf("metrics listening on %s", cfg.MetricsListen)
+	}
 
 	// One semaphore shared across all listeners so the cap is a global
 	// ceiling on concurrent connections, not per-port.
 	log.Printf("fingerprint method: %s", method)
-	proxyServer := gateproxy.NewServer(maxConcurrentConns, log.Printf)
-	var listeners []net.Listener
+	proxyServer := gateproxy.NewServer(cfg.MaxConnections, func(format string, args ...any) {
+		if strings.Contains(format, "OVERLOAD") {
+			metrics.incGlobalOverload()
+		}
+		log.Printf(format, args...)
+	})
 	for _, rt := range routes {
 		blockUnknown, sendProxyV2 := rt.policy(*allowUnknown, *proxyProtocol)
 		// upg.Listen rather than net.Listen: on an upgrade the socket is
@@ -266,11 +280,19 @@ func cmdServe(args []string) {
 		} else {
 			log.Printf("listening on %s -> %s (protocol=tls, allow-unknown=%t, proxy-v2=%t)", rt.Listen, rt.Backend, !blockUnknown, sendProxyV2)
 		}
+		guard := newRouteGuard(rt.Listen, rt.maxConcurrent, metrics)
+		routeLimiter := &observedLimiter{limiter: limiter, metric: guard.metric}
 		proxyServer.Serve(ln, rt.Route, func(conn net.Conn, route gateproxy.Route) {
+			if !guard.acquire() {
+				log.Printf("[%s] OVERLOAD route %s at max concurrent %d", conn.RemoteAddr(), rt.Listen, rt.maxConcurrent)
+				_ = conn.Close()
+				return
+			}
+			defer guard.release()
 			if protocol == "smtp" {
-				handleSMTPConn(conn, route.Backend, route.Port, method, limiter, sendProxyV2, smtpEvents)
+				handleSMTPConn(conn, route.Backend, route.Port, method, routeLimiter, sendProxyV2, smtpEvents)
 			} else {
-				handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, limiter, allow, sendProxyV2)
+				handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, routeLimiter, allow, sendProxyV2)
 			}
 		})
 	}
@@ -292,6 +314,9 @@ func cmdServe(args []string) {
 		_ = ln.Close()
 	}
 	stopBackground()
+	if metricsServer != nil {
+		_ = metricsServer.Close()
+	}
 
 	timeout := *drainTimeout
 	if process.Terminating() {
@@ -310,7 +335,7 @@ func cmdServe(args []string) {
 	}
 }
 
-func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter *ratelimit.Limiter, allow *ipAllowlist, sendProxyV2 bool) {
+func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter connectionLimiter, allow *ipAllowlist, sendProxyV2 bool) {
 	// A peer that already went away is the normal case, not a fault.
 	defer func() {
 		if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -329,7 +354,7 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 
 	// Drop floods before any read or DB write so a single IP cannot pin
 	// goroutines or grow the fingerprint store with randomized handshakes.
-	if !limiter.Allow(clientIP) {
+	if limiter != nil && !limiter.Allow(clientIP) {
 		log.Printf("[%s:%d] RATELIMIT dropping connection", clientIP, port)
 		return
 	}
@@ -418,6 +443,7 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 
 	upstream, err := net.DialTimeout("tcp", backend, 10*time.Second)
 	if err != nil {
+		recordBackendFailure(limiter)
 		log.Printf("[%s:%d] dial backend: %v", clientIP, port, err)
 		return
 	}

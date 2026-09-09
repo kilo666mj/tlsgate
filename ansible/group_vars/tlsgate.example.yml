@@ -15,6 +15,7 @@ routes:
   #   backend: "127.0.0.1:1443"
   #   allow_unknown: true
   #   proxy_protocol: v2
+  #   max_concurrent: 256
 
 # JA4 is stable across TLS extension reordering. Changing methods later requires
 # reset_fingerprints: true for one deployment and re-enrollment of every client.
@@ -26,6 +27,12 @@ allow_unknown: false
 drain_timeout: 1h
 smtp_events: ""
 smtp_instance: ""
+
+# Bind metrics to loopback when a host-local Prometheus scrapes TLSGate.
+metrics_listen: "127.0.0.1:9192"
+max_concurrent_connections: 1024
+connection_rate_per_ip: 1.0
+connection_burst_per_ip: 120
 
 max_fingerprints: 100000
 notification_urls: []

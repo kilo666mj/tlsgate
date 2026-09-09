@@ -21,6 +21,9 @@ import (
 const (
 	defaultConfig          = "/var/lib/tlsgate/config.json"
 	defaultMaxFingerprints = 100000
+	defaultMaxConnections  = 1024
+	defaultConnectionRate  = 1.0
+	defaultConnectionBurst = 120
 )
 
 const (
@@ -45,6 +48,10 @@ type AppConfig struct {
 	DrainTimeout      string            `json:"drain_timeout"`
 	SMTPEvents        string            `json:"smtp_events"`
 	SMTPInstance      string            `json:"smtp_instance"`
+	MetricsListen     string            `json:"metrics_listen"`
+	MaxConnections    int               `json:"max_concurrent_connections"`
+	ConnectionRate    float64           `json:"connection_rate_per_ip"`
+	ConnectionBurst   int               `json:"connection_burst_per_ip"`
 	NotificationURLs  []string          `json:"notification_urls"`
 	NotificationMode  NotificationMode  `json:"notification_mode"`
 	// MaxFingerprints caps how many fingerprint entries are kept in the
@@ -157,12 +164,12 @@ type blockedRangeAlert struct {
 
 func loadConfig(path string) (AppConfig, error) {
 	if path == "" {
-		return AppConfig{MaxFingerprints: defaultMaxFingerprints}, nil
+		return AppConfig{MaxFingerprints: defaultMaxFingerprints, MaxConnections: defaultMaxConnections, ConnectionRate: defaultConnectionRate, ConnectionBurst: defaultConnectionBurst}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return AppConfig{MaxFingerprints: defaultMaxFingerprints}, nil
+			return AppConfig{MaxFingerprints: defaultMaxFingerprints, MaxConnections: defaultMaxConnections, ConnectionRate: defaultConnectionRate, ConnectionBurst: defaultConnectionBurst}, nil
 		}
 		return AppConfig{}, err
 	}
@@ -175,6 +182,24 @@ func loadConfig(path string) (AppConfig, error) {
 	}
 	if cfg.MaxFingerprints == 0 {
 		cfg.MaxFingerprints = defaultMaxFingerprints
+	}
+	if cfg.MaxConnections < 0 {
+		return AppConfig{}, fmt.Errorf("max_concurrent_connections must be positive, got %d", cfg.MaxConnections)
+	}
+	if cfg.MaxConnections == 0 {
+		cfg.MaxConnections = defaultMaxConnections
+	}
+	if cfg.ConnectionRate < 0 {
+		return AppConfig{}, fmt.Errorf("connection_rate_per_ip must be positive, got %g", cfg.ConnectionRate)
+	}
+	if cfg.ConnectionRate == 0 {
+		cfg.ConnectionRate = defaultConnectionRate
+	}
+	if cfg.ConnectionBurst < 0 {
+		return AppConfig{}, fmt.Errorf("connection_burst_per_ip must be positive, got %d", cfg.ConnectionBurst)
+	}
+	if cfg.ConnectionBurst == 0 {
+		cfg.ConnectionBurst = defaultConnectionBurst
 	}
 	if cfg.NotificationMode == "" {
 		cfg.NotificationMode = NotificationModeFailover

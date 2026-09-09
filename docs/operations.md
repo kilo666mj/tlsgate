@@ -322,7 +322,9 @@ RATELIMIT dropping connection
 OVERLOAD  at capacity, dropping connection
 ```
 
-Two limits protect against floods:
+Three layered limits protect against floods. Their values can be set in the
+JSON config with `connection_rate_per_ip`, `connection_burst_per_ip`,
+`max_concurrent_connections`, and each route's optional `max_concurrent`:
 
 - **Per source IP** — a token bucket (~1 conn/s sustained, burst 120) checked
   before any handshake read or database write. A single IP over its budget is
@@ -331,14 +333,31 @@ Two limits protect against floods:
   throttles the *rate* of new entries per IP, not the lifetime total, and an
   attacker spread across many IPv6 addresses can still stay under the per-IP
   ceiling.
-- **Global** — at most `maxConcurrentConns` (1024) connections are processed at
+- **Global** — by default at most 1024 connections are processed at
   once across all listeners, capping goroutines, file descriptors, and backend
   dials. Connections beyond the cap are dropped with an `OVERLOAD` line. This
   catches the distributed/IPv6 case the per-IP limiter misses. The systemd unit
   sets `LimitNOFILE=8192` to leave headroom above the resulting socket count.
+- **Per route** — `max_concurrent` reserves the remainder of the process-wide
+  budget for other listeners when one service is flooded. Omit it (or leave it
+  at zero in generated configuration) when only the global ceiling is wanted.
 
-Both limits are generous enough that legitimate clients — including many devices
+These defaults are generous enough that legitimate clients — including many devices
 behind one NAT address — do not hit them.
+
+## Prometheus metrics
+
+Set `metrics_listen` to expose a Prometheus text endpoint at `/metrics`. Prefer
+a loopback address such as `127.0.0.1:9192` when a host-local Prometheus can
+scrape it; do not expose operational metrics on a public listener.
+
+TLSGate exports active and total connections, rate-limit rejections, global
+and per-route overload rejections, route capacity, and backend connection
+failures. Route series carry only the configured `listener` and numeric `port`
+labels, so their cardinality is fixed by the route configuration. Use
+`rate(tlsgate_connections_total[5m])` grouped by `port` for per-port traffic
+rates and alert on sustained increases in `tlsgate_rate_limited_total`,
+`tlsgate_overload_total`, or `tlsgate_backend_connection_failures_total`.
 
 Fingerprint entries also store passive ClientHello metadata when available:
 SNI, ALPN protocols, supported TLS versions, signature algorithms, and the

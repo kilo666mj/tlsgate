@@ -50,7 +50,7 @@ func TestRoutePolicyOverrides(t *testing.T) {
 }
 
 func TestRouteRejectsInvalidOptionsWithoutMutation(t *testing.T) {
-	for _, suffix := range []string{",", ",allow-unknown", ",allow-unknown=1", ",proxy-protocol=v1", ",alow-unknown=true", ",allow-unknown=true,allow-unknown=false", ",proxy-protocol=off,proxy-protocol=v2"} {
+	for _, suffix := range []string{",", ",allow-unknown", ",allow-unknown=1", ",proxy-protocol=v1", ",alow-unknown=true", ",allow-unknown=true,allow-unknown=false", ",proxy-protocol=off,proxy-protocol=v2", ",max-concurrent=0", ",max-concurrent=-1", ",max-concurrent=many"} {
 		var routes routeConfigs
 		if err := routes.Set("[::]:443=127.0.0.1:1443" + suffix); err == nil || len(routes) != 0 {
 			t.Fatalf("accepted %q or mutated routes", suffix)
@@ -62,6 +62,19 @@ func TestRouteRejectsInvalidOptionsWithoutMutation(t *testing.T) {
 	}
 	if err := routes.Set("[::]:443=127.0.0.1:2443"); err == nil {
 		t.Fatal("accepted duplicate listener")
+	}
+}
+
+func TestRouteMaxConcurrentRoundTrip(t *testing.T) {
+	var routes routeConfigs
+	if err := routes.Set("[::]:443=127.0.0.1:1443,max-concurrent=256"); err != nil {
+		t.Fatal(err)
+	}
+	if routes[0].maxConcurrent != 256 {
+		t.Fatalf("maxConcurrent = %d, want 256", routes[0].maxConcurrent)
+	}
+	if got := routes.String(); !strings.Contains(got, "max-concurrent=256") {
+		t.Fatalf("String() = %q", got)
 	}
 }
 

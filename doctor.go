@@ -109,6 +109,13 @@ func runDoctor(args []string, out io.Writer) error {
 		emit("unknown fingerprints: blocked\n")
 	}
 	emit("max fingerprints: %d\n", cfg.MaxFingerprints)
+	emit("max concurrent connections: %d\n", cfg.MaxConnections)
+	emit("connection rate per IP: %g/s (burst %d)\n", cfg.ConnectionRate, cfg.ConnectionBurst)
+	if cfg.MetricsListen == "" {
+		emit("metrics: disabled\n")
+	} else {
+		emit("metrics: %s/metrics\n", cfg.MetricsListen)
+	}
 	emit("trusted source ranges: %d\n", len(cfg.ApproveRanges))
 	emit("alert ranges: %d\n", len(cfg.AlertRanges))
 	if cfg.ControlPlane.Enabled() {
@@ -129,6 +136,9 @@ func runDoctor(args []string, out io.Writer) error {
 				emit("route: %s -> %s (protocol=smtp, observation-only, proxy-v2=%t)\n", route.Listen, route.Backend, proxy)
 			} else {
 				emit("route: %s -> %s (allow-unknown=%t, proxy-v2=%t)\n", route.Listen, route.Backend, !block, proxy)
+			}
+			if route.maxConcurrent > 0 {
+				emit("route capacity: %s max-concurrent=%d\n", route.Listen, route.maxConcurrent)
 			}
 		}
 	}
