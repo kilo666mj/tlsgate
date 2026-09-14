@@ -175,6 +175,21 @@ The first split can require `hard_restart: true` when a previous tableflip
 parent is still draining and prevents another handoff. This interrupts active
 connections, so schedule and approve that transition explicitly.
 
+### Local Prometheus integration
+
+Set `metrics_listen` to a loopback address such as `127.0.0.1:9192`. When
+`/etc/prometheus/prometheus.yml` exists, the Ansible playbook adds a managed
+`tlsgate` scrape job, validates the complete installed configuration, reloads
+Prometheus, and verifies the endpoint. Additional isolated instances with a
+non-empty `metrics_listen` value are added to the same job. Each target receives
+an `instance` label beginning with the inventory hostname and a `gate_node`
+label containing its Gatehub instance ID; this preserves node identity through
+hostname-filtered Prometheus federation.
+
+Set `tlsgate_configure_local_prometheus: false` if another configuration manager
+owns the Prometheus file. Override `tlsgate_prometheus_config` when it is not at
+the default path. Metrics stay on loopback and require no public firewall rule.
+
 ### nginx listener configuration
 
 For nginx, the corresponding listener and real-IP configuration is typically:

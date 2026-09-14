@@ -30,6 +30,8 @@ smtp_instance: ""
 
 # Bind metrics to loopback when a host-local Prometheus scrapes TLSGate.
 metrics_listen: "127.0.0.1:9192"
+tlsgate_configure_local_prometheus: true
+tlsgate_prometheus_config: /etc/prometheus/prometheus.yml
 max_concurrent_connections: 1024
 connection_rate_per_ip: 1.0
 connection_burst_per_ip: 120

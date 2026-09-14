@@ -103,6 +103,7 @@
         CGO_ENABLED: "0"
         GOOS: linux
         GOARCH: "{{ goarch }}"
+        GOTOOLCHAIN: go1.27.1
         GOCACHE: /tmp/tlsgate-go-cache
         GOMODCACHE: /tmp/tlsgate-go-mod-cache
       vars:
@@ -228,10 +229,90 @@
       loop_control:
         label: "{{ item.name }}"
 
+    - name: Check for a local Prometheus configuration
+      ansible.builtin.stat:
+        path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
+      register: tlsgate_prometheus_config_file
+
+    - name: Configure local Prometheus to scrape TLSGate instances
+      ansible.builtin.blockinfile:
+        path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
+        marker: "# {mark} ANSIBLE MANAGED TLSGATE METRICS"
+        block: |2
+            - job_name: tlsgate
+              static_configs:
+                - targets:
+                    - {{ metrics_listen | to_json }}
+                  labels:
+                    instance: {{ (inventory_hostname ~ '-tlsgate') | to_json }}
+                    gate_node: {{ control_plane.instance_id | default(inventory_hostname) | to_json }}
+          {% for item in tlsgate_extra_instances | default([]) %}
+          {% if item.config_data.metrics_listen | default('') | length > 0 %}
+                - targets:
+                    - {{ item.config_data.metrics_listen | to_json }}
+                  labels:
+                    instance: {{ (inventory_hostname ~ '-tlsgate-' ~ item.name) | to_json }}
+                    gate_node: {{ item.config_data.control_plane.instance_id | default(item.name) | to_json }}
+          {% endif %}
+          {% endfor %}
+        # Validate YAML syntax before replacement. Full validation below uses
+        # the installed path so existing relative rule and certificate paths
+        # resolve against the correct directory.
+        validate: "/usr/bin/promtool check config --syntax-only %s"
+        backup: true
+      when:
+        - tlsgate_configure_local_prometheus | default(true) | bool
+        - metrics_listen | default('') | length > 0
+        - tlsgate_prometheus_config_file.stat.exists
+      notify: Reload prometheus
+
+    - name: Validate the installed Prometheus configuration
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/promtool
+          - check
+          - config
+          - "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
+      changed_when: false
+      when:
+        - tlsgate_configure_local_prometheus | default(true) | bool
+        - metrics_listen | default('') | length > 0
+        - tlsgate_prometheus_config_file.stat.exists
+
+    - name: Verify the primary TLSGate metrics endpoint
+      ansible.builtin.uri:
+        url: "http://{{ metrics_listen }}/metrics"
+        return_content: true
+        status_code: 200
+      register: tlsgate_metrics_response
+      failed_when: >-
+        tlsgate_metrics_response.status != 200 or
+        'tlsgate_connections_total' not in tlsgate_metrics_response.content
+      when: metrics_listen | default('') | length > 0
+
+    - name: Verify additional TLSGate metrics endpoints
+      ansible.builtin.uri:
+        url: "http://{{ item.config_data.metrics_listen }}/metrics"
+        return_content: true
+        status_code: 200
+      register: tlsgate_extra_metrics_response
+      failed_when: >-
+        tlsgate_extra_metrics_response.status != 200 or
+        'tlsgate_connections_total' not in tlsgate_extra_metrics_response.content
+      loop: "{{ tlsgate_extra_instances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.config_data.metrics_listen | default('') | length > 0
+
   handlers:
     - name: Reload systemd
       systemd:
         daemon_reload: true
+
+    - name: Reload prometheus
+      ansible.builtin.systemd:
+        name: prometheus
+        state: reloaded
 
     # reload-or-restart performs a graceful upgrade when tlsgate is already
     # running: systemctl runs ExecReload (SIGHUP), tableflip re-execs the new
