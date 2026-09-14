@@ -19,7 +19,7 @@ There are no generated assets or frontend files.
 
 ## Build, Test, and Development Commands
 
-Use Go 1.26.5 or newer.
+Use Go 1.27.1 or newer.
 
 ```bash
 go build -o tlsgate .

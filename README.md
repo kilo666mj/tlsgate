@@ -67,7 +67,7 @@ methods requires an explicit reset and re-enrollment.
 
 Download a static Linux binary from the
 [GitHub releases page](https://github.com/kilo666mj/tlsgate/releases), or build
-and test with Go 1.26.5 or newer:
+and test with Go 1.27.1 or newer:
 
 ```sh
 go build -o tlsgate .

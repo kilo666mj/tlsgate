@@ -4,7 +4,7 @@ Ansible, graceful upgrades, Docker, and PROXY protocol deployment guidance.
 
 Static Linux binaries are available from the
 [GitHub releases page](https://github.com/kilo666mj/tlsgate/releases). Building
-from source or with Ansible requires Go 1.26.5 or newer.
+from source or with Ansible requires Go 1.27.1 or newer.
 
 ## Deploy
 
