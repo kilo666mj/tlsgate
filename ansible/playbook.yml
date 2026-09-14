@@ -234,6 +234,36 @@
         path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
       register: tlsgate_prometheus_config_file
 
+    - name: Check for an existing TLSGate scrape job
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/grep
+          - -Eq
+          - '^\s*-\s+job_name:\s+tlsgate\s*$'
+          - "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
+      register: tlsgate_prometheus_existing_job
+      changed_when: false
+      failed_when: tlsgate_prometheus_existing_job.rc not in [0, 1]
+      when:
+        - tlsgate_configure_local_prometheus | default(true) | bool
+        - metrics_listen | default('') | length > 0
+        - tlsgate_prometheus_config_file.stat.exists
+
+    - name: Normalize labels in an existing TLSGate scrape job
+      ansible.builtin.lineinfile:
+        path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
+        regexp: '^(\s*)tlsgate_instance:(.*)$'
+        line: '\1gate_node:\2'
+        backrefs: true
+        backup: true
+        validate: "/usr/bin/promtool check config --syntax-only %s"
+      when:
+        - tlsgate_configure_local_prometheus | default(true) | bool
+        - metrics_listen | default('') | length > 0
+        - tlsgate_prometheus_config_file.stat.exists
+        - tlsgate_prometheus_existing_job.rc == 0
+      notify: Reload prometheus
+
     - name: Configure local Prometheus to scrape TLSGate instances
       ansible.builtin.blockinfile:
         path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
@@ -264,6 +294,7 @@
         - tlsgate_configure_local_prometheus | default(true) | bool
         - metrics_listen | default('') | length > 0
         - tlsgate_prometheus_config_file.stat.exists
+        - tlsgate_prometheus_existing_job.rc == 1
       notify: Reload prometheus
 
     - name: Validate the installed Prometheus configuration

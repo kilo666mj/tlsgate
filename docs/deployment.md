@@ -186,6 +186,10 @@ an `instance` label beginning with the inventory hostname and a `gate_node`
 label containing its Gatehub instance ID; this preserves node identity through
 hostname-filtered Prometheus federation.
 
+If a host already has a `tlsgate` scrape job, the playbook preserves it instead
+of adding a duplicate and normalizes the legacy `tlsgate_instance` target label
+to `gate_node`.
+
 Set `tlsgate_configure_local_prometheus: false` if another configuration manager
 owns the Prometheus file. Override `tlsgate_prometheus_config` when it is not at
 the default path. Metrics stay on loopback and require no public firewall rule.
