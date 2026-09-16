@@ -406,15 +406,15 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 			switch entry.Status {
 			case StatusBlocked:
 				if whitelisted {
-					log.Printf("[%s:%d] WHITELIST forwarding blocked fp=%q", clientIP, port, fp)
+					logFingerprintDecision(clientIP, port, "WHITELIST forwarding blocked", fp, meta)
 					break
 				}
-				log.Printf("[%s:%d] BLOCKED  fp=%q", clientIP, port, fp)
+				logFingerprintDecision(clientIP, port, "BLOCKED ", fp, meta)
 				alerter.AlertBlocked(st, clientIP, port, fp, meta)
 				return
 			case StatusPending:
 				if blockThis {
-					log.Printf("[%s:%d] BLOCKED pending fp=%q", clientIP, port, fp)
+					logFingerprintDecision(clientIP, port, "BLOCKED pending", fp, meta)
 					alerter.AlertBlocked(st, clientIP, port, fp, meta)
 					return
 				}
@@ -589,6 +589,11 @@ func sanitizeLog(s string) string {
 		}
 		return r
 	}, s)
+}
+
+func logFingerprintDecision(clientIP string, port int, status, fp string, meta TLSMetadata) {
+	log.Printf("[%s:%d] %s fp=%q sni=%q alpn=%q", clientIP, port, status, fp,
+		sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")))
 }
 
 // sanitizeAlertField prepares an attacker-controlled value (notably SNI) for

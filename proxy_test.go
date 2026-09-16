@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -46,6 +47,32 @@ func TestSanitizeLog(t *testing.T) {
 				t.Fatalf("sanitizeLog(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+func TestLogFingerprintDecisionIncludesSanitizedMetadata(t *testing.T) {
+	old := log.Writer()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(old) })
+
+	logFingerprintDecision("192.0.2.1", 443, "BLOCKED ", "ja4-test", TLSMetadata{
+		SNI:  "blocked.example\nFORGED",
+		ALPN: []string{"h2", "http/1.1\tFORGED"},
+	})
+
+	got := output.String()
+	for _, want := range []string{
+		`[192.0.2.1:443] BLOCKED  fp="ja4-test"`,
+		`sni="blocked.exampleFORGED"`,
+		`alpn="h2,http/1.1FORGED"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if strings.Count(got, "\n") != 1 {
+		t.Fatalf("multiline fingerprint decision log: %q", got)
 	}
 }
 
