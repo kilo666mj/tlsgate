@@ -135,6 +135,9 @@ Docker, and PROXY protocol configuration.
   sync, storage limits, logs, and enrollment
 - [SMTP TLS correlation](docs/smtp-correlation.md) — observe STARTTLS and join
   fingerprints to explicit spam/ham verdicts in a report-only workflow
+- [SMTP deployment example](docs/mx-smtp.md) — place the report-only observer
+  ahead of a PROXY-aware MTA using reserved example infrastructure
+- [How the five Gate projects fit together](https://github.com/kilo666mj/michaelspost-docs/blob/main/docs/guides/gate-stack.md)
 - [Repository guidance](AGENTS.md)
 
 ## License
