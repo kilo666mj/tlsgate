@@ -227,11 +227,11 @@ func (o *smtpObserver) client(p []byte) {
 		}
 		verb := canonicalSMTPVerb(fields[0])
 		o.behavior.command(rawLine, verb, o.greeted, o.observedAt())
-		o.commands = append(o.commands, verb)
-		if len(o.commands) > 256 {
+		if len(o.commands) >= 256 {
 			o.disabled = true
 			return
 		}
+		o.commands = append(o.commands, verb)
 		if verb == "BDAT" {
 			if len(fields) < 2 {
 				o.disabled = true

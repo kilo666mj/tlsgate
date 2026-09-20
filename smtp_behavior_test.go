@@ -62,7 +62,7 @@ func TestSMTPBehaviorVerbShapeBounded(t *testing.T) {
 	if !got.VerbOverflow || len(o.behavior.verbs) != maxSMTPBehaviorVerbs || strings.Contains(got.VerbShape, "private") {
 		t.Fatalf("unbounded or unsafe shape: %+v", got)
 	}
-	if !o.disabled || len(o.commands) > 257 {
+	if !o.disabled || len(o.commands) != 256 {
 		t.Fatalf("command queue was not bounded: disabled=%v commands=%d", o.disabled, len(o.commands))
 	}
 }
