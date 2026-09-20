@@ -33,6 +33,7 @@ type smtpConnRecord struct {
 	Start, End, TLS, Accepted                time.Time
 	State                                    string
 	Invalid                                  bool
+	Behavior                                 *smtpBehavior
 }
 type smtpMessage struct {
 	Instance, QueueID, Client, PID string
@@ -422,6 +423,7 @@ func readSMTPConnectionsStats(path string) ([]smtpConnRecord, int, error) {
 		case "end":
 			c.End = e.Timestamp
 			c.State = e.State
+			c.Behavior = e.Behavior
 		default:
 			bad++
 			c.Invalid = true

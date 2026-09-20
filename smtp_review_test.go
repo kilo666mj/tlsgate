@@ -142,6 +142,7 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 	t.Cleanup(func() { closeTestResource(t, "SMTP event input", f.Close) })
 	d := json.NewDecoder(f)
 	found := false
+	foundBehavior := false
 	for {
 		var e smtpEvent
 		if err := d.Decode(&e); err == io.EOF {
@@ -155,9 +156,18 @@ func TestSMTPReviewRealSTARTTLSAndEncryptedMessage(t *testing.T) {
 			}
 			found = true
 		}
+		if e.Type == "end" {
+			if e.Behavior == nil || e.Behavior.Fingerprint == "" || e.Behavior.STARTTLSOutcome != "accepted" {
+				t.Fatalf("invalid end behavior: %+v", e)
+			}
+			foundBehavior = true
+		}
 	}
 	if !found {
 		t.Fatal("real STARTTLS handshake produced no fingerprint")
+	}
+	if !foundBehavior {
+		t.Fatal("connection end event contained no behavior metadata")
 	}
 }
 
@@ -194,11 +204,14 @@ func TestSMTPReviewCommandFloodBoundsObserver(t *testing.T) {
 func TestSMTPReviewBDATPayloadNeverBecomesCommand(t *testing.T) {
 	o := &smtpObserver{method: MethodJA3}
 	o.server([]byte("220 ready\r\n"))
-	o.client([]byte("BDAT 10 LAST\r\nSTARTTLS\r\n"))
-	o.server([]byte("220 fake payload response\r\n"))
+	o.client([]byte("BDAT 10 LAST\r\nSTARTTLS\r\nSTARTTLS\r\n"))
+	o.server([]byte("250 chunk accepted\r\n220 ready\r\n"))
 	o.client(captureClientHello(t))
-	if o.fingerprinted || !o.disabled {
-		t.Fatal("unsupported BDAT flow was interpreted as STARTTLS")
+	if !o.fingerprinted || o.disabled {
+		t.Fatal("BDAT payload was interpreted as a command or disabled observation")
+	}
+	if got := o.behaviorSnapshot().VerbShape; got != "BDAT>STARTTLS" {
+		t.Fatalf("BDAT payload entered behavior shape: %q", got)
 	}
 }
 

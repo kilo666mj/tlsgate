@@ -24,6 +24,7 @@ Commands:
   list     List all fingerprints
   correlate Correlate a fingerprint with service logs
   correlate-smtp Correlate SMTP TLS events with Postfix and verdict logs
+  classify-smtp Classify report-only SMTP campaigns from exact joined evidence
   report-smtp Upload a bounded SMTP correlation report to Gatehub
   approve  Approve a fingerprint
   block    Block a fingerprint
@@ -48,6 +49,8 @@ func main() {
 		cmdCorrelate(os.Args[2:])
 	case "correlate-smtp":
 		cmdCorrelateSMTP(os.Args[2:])
+	case "classify-smtp":
+		cmdClassifySMTP(os.Args[2:])
 	case "report-smtp":
 		cmdReportSMTP(os.Args[2:])
 	case "approve":

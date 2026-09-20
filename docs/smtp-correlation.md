@@ -22,6 +22,39 @@ pending enforcement decision. To follow SMTP entries:
 sudo journalctl -fu tlsgate | grep --line-buffered ' smtp '
 ```
 
+### Content-free behavior fingerprints
+
+Version 1 end events may also contain an additive `behavior` object. Existing
+version 1 readers can ignore this unknown field. The object contains only a
+closed vocabulary of behavioral dimensions; it never contains HELO names,
+envelope arguments, recipients, AUTH material, DATA/BDAT bytes, or other raw
+command text.
+
+The v1 dimensions are:
+
+- commands completed before the server greeting: `none`, `one`, or `many`;
+- the first normalized verb and the first 12 normalized verbs as a `>`-joined
+  shape, with extra verbs represented only by `verb_overflow=true`;
+- command line endings: `crlf`, `lf`, `mixed`, or `none`;
+- first-command and first-STARTTLS timing from TCP accept: `under_1s`,
+  `1s_to_5s`, `5s_to_30s`, `30s_or_more`, or `unknown`;
+- STARTTLS outcome: `accepted`, `refused`, `not_seen`, or `unknown` when
+  observation became incomplete before an outcome was known.
+
+Recognized SMTP verbs are emitted by name; every other token is `OTHER`.
+`fingerprint` has the form `smtp-behavior/v1/<hex>`, where `<hex>` is the full
+lowercase SHA-256 of this UTF-8 canonical record:
+
+```text
+v=1|pre=<bucket>|first=<verb>|eol=<style>|first_timing=<bucket>|starttls_timing=<bucket>|verbs=<shape>|overflow=<bool>|starttls=<outcome>
+```
+
+Absent verbs and shapes use `NONE`. Missing timings use `unknown`. These exact
+values and field order are the v1 compatibility contract; changing them
+requires a new behavior version. Timing is intentionally coarse telemetry and
+the fingerprint remains report-only—it is not an authentication identity or a
+TLSGate allow/block key.
+
 Configure a dedicated route and event file in the runtime JSON:
 
 ```json
@@ -135,8 +168,8 @@ carry multiple messages. Plaintext messages before a later STARTTLS transition
 are not attributed to that TLS fingerprint.
 
 The SMTP observer understands multiline replies, PIPELINING, DATA dot bodies,
-and fragmented TLS records. It falls back to transparent forwarding when it
-sees BDAT, oversized command state, or malformed TLS. Telemetry uses a bounded
+BDAT byte counts, and fragmented TLS records. It falls back to transparent
+forwarding when it sees malformed BDAT framing, oversized command state, or malformed TLS. Telemetry uses a bounded
 queue; a full or failed collector path can lose observations but cannot stop
 mail forwarding. Counts named `no_observed_upgrade` mean exactly that; missing
 or incomplete telemetry is reported separately and is not proof of plaintext.
@@ -162,6 +195,64 @@ after an accepted upgrade can supply a fingerprint, and timestamp overlap is
 reported as unknown. Malformed records have separate counters; entire sessions
 whose telemetry was lost cannot be counted. Historical logs from before this
 feature was enabled cannot be retroactively fingerprinted.
+
+## Offline campaign classification
+
+`tlsgate classify-smtp` is a sibling, report-only classifier. It consumes the
+same completed TLSGate event snapshots plus RFC3339-prefixed Postfix/Postscreen
+logs; it does not read Rspamd verdicts, call a network enrichment service, or
+write any TLSGate/Gatehub decision database.
+
+```sh
+tlsgate classify-smtp \
+  --events /var/lib/tlsgate/smtp-events-2026-09-19.jsonl \
+  --postfix-log /var/log/postfix-2026-09-19.log \
+  --instance mx-public --listener '203.0.113.25:25' \
+  --network-prefixes /etc/tlsgate/smtp-network-prefixes.json \
+  --format json
+```
+
+The output schema is `smtp-campaign-report/v1`. A Postfix/Postscreen evidence
+session is attributable only when exactly one TLSGate connection has the same
+instance, invocation-scoped listener, canonical client IP **and source port**,
+and contains every evidence timestamp within its completed, bounded lifetime.
+The default maximum lifetime is ten minutes and timestamp tolerance is one
+second. Missing and overlapping candidates remain visible as
+`no_exact_connection` or `ambiguous_exact_connection`; there is no IP-only or
+nearest-time fallback.
+
+The initial signature is
+`smtp/pregreet-helo-support-selfdomain/v1`. It requires all of the following:
+
+1. TLSGate behavior v1 observed one or more pre-greeting commands and `HELO`
+   as the first normalized verb.
+2. Postscreen independently recorded a pre-greeting `HELO` on the exact tuple.
+3. A rejection on that session recorded an envelope sender whose local part is
+   `support`.
+4. The canonical HELO domain exactly equals that sender's canonical domain.
+
+This intentionally excludes unrelated Postscreen rule-5/PREGREET traffic,
+`EHLO` probes, other sender local parts, and mismatched HELO domains. Provider
+and recipient clustering are context only and never make a record match. Raw
+sender, HELO, and recipient values are omitted from output; the recipient is a
+lowercase SHA-256 cluster identifier.
+
+Optional network context comes only from an operator-supplied regular JSON file
+of at most 1 MiB. Prefixes must be canonical CIDRs; the longest match wins:
+
+```json
+{
+  "prefixes": [
+    {"prefix": "192.0.2.0/24", "provider": "example-cloud"}
+  ]
+}
+```
+
+This file is enrichment metadata, not an allow/block list. Classification has
+no inline DNS, WHOIS, cloud API, or other live-network dependency. Treat log
+payloads as untrusted evidence: malformed targeted records are counted, raw
+payload text is never copied to reports, and only bounded parsed fields inform
+the signature.
 
 Unsupported queue reinjection, absent queue IDs, and rejected sessions with no
 queue assignment cannot produce a fingerprint-to-message verdict. This is a

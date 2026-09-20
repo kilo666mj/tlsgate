@@ -1,0 +1,3 @@
+2026-09-19T12:03:13.500000Z mx container[404]: Sep 19 12:03:13 container haproxy/postscreen[404]: CONNECT from [198.51.100.45]:57212 to [127.0.0.1]:25
+2026-09-19T12:03:14Z mx container[404]: Sep 19 12:03:14 container haproxy/postscreen[404]: PREGREET 25 after 0.11 from [198.51.100.45]:57212: HELO campaign.example\r\n
+2026-09-19T12:03:17Z mx container[404]: Sep 19 12:03:17 container haproxy/postscreen[404]: NOQUEUE: reject: RCPT from [198.51.100.45]:57212: 550 5.5.1 Protocol error; from=<support@campaign.example>, to=<user@example.net>, proto=SMTP, helo=<campaign.example>

@@ -137,6 +137,8 @@ def main():
     p.add_argument("--report-gatehub", action="store_true",
                    help="upload each completed report using control-plane credentials")
     p.add_argument("--config", default="/etc/tlsgate/config.json")
+    p.add_argument("--network-prefixes", default="",
+                   help="optional offline network-prefix JSON for campaign context")
     args = p.parse_args()
     output = Path(args.output)
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -183,10 +185,24 @@ def main():
                     "--generated-at", generated_at.isoformat()], check=True)
                 published.append(listener)
             os.replace(report, destination)
+            campaign_report = work / f"campaign-latest-{slug}.json"
+            campaign_command = [
+                args.tlsgate, "classify-smtp", "--events", str(work / "events.jsonl"),
+                "--postfix-log", str(work / "postfix.log"), "--instance", args.instance,
+                "--listener", listener, "--format", "json"]
+            if args.network_prefixes:
+                campaign_command.extend(["--network-prefixes", args.network_prefixes])
+            with campaign_report.open("wb") as out:
+                subprocess.run(campaign_command, check=True, stdout=out)
+            os.chmod(campaign_report, 0o600)
+            os.replace(campaign_report, output / campaign_report.name)
         manifest = work / "latest.json"
         manifest.write_text(json.dumps({"generated_at": generated_at.isoformat(),
                                         "coverage_start": start.isoformat(), "coverage_end": cutoff.isoformat(),
-                                        "listeners": [{"listener": x, "report": "latest-" + hashlib.sha256(x.encode()).hexdigest()[:16] + ".json", "gatehub_reported": x in published} for x in listeners]}, separators=(",", ":")) + "\n")
+                                        "listeners": [{"listener": x,
+                                                       "report": "latest-" + hashlib.sha256(x.encode()).hexdigest()[:16] + ".json",
+                                                       "campaign_report": "campaign-latest-" + hashlib.sha256(x.encode()).hexdigest()[:16] + ".json",
+                                                       "gatehub_reported": x in published} for x in listeners]}, separators=(",", ":")) + "\n")
         os.chmod(manifest, 0o600)
         os.replace(manifest, output / "latest.json")
 
