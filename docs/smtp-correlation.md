@@ -168,8 +168,9 @@ carry multiple messages. Plaintext messages before a later STARTTLS transition
 are not attributed to that TLS fingerprint.
 
 The SMTP observer understands multiline replies, PIPELINING, DATA dot bodies,
-BDAT byte counts, and fragmented TLS records. It falls back to transparent
-forwarding when it sees malformed BDAT framing, oversized command state, or malformed TLS. Telemetry uses a bounded
+BDAT byte counts up to 2 GiB, and fragmented TLS records. It falls back to
+transparent forwarding when it sees malformed or larger BDAT framing,
+oversized command state, or malformed TLS. Telemetry uses a bounded
 queue; a full or failed collector path can lose observations but cannot stop
 mail forwarding. Counts named `no_observed_upgrade` mean exactly that; missing
 or incomplete telemetry is reported separately and is not proof of plaintext.

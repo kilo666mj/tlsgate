@@ -215,6 +215,15 @@ func TestSMTPReviewBDATPayloadNeverBecomesCommand(t *testing.T) {
 	}
 }
 
+func TestSMTPReviewOversizedBDATDisablesOnlyObservation(t *testing.T) {
+	o := &smtpObserver{method: MethodJA3}
+	o.server([]byte("220 ready\r\n"))
+	o.client([]byte("BDAT 2147483648 LAST\r\n"))
+	if !o.disabled {
+		t.Fatal("oversized BDAT remained observable")
+	}
+}
+
 func TestSMTPReviewUnsolicitedGreetingDoesNotAcceptSTARTTLS(t *testing.T) {
 	o := &smtpObserver{method: MethodJA3}
 	o.client([]byte("STARTTLS\r\n"))

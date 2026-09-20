@@ -163,7 +163,7 @@ type smtpObserver struct {
 	refused, premature                        bool
 	greeted                                   bool
 	tlsBytes                                  []byte
-	bdatRemaining                             uint64
+	bdatRemaining                             int
 	behavior                                  smtpBehaviorTracker
 	now                                       func() time.Time
 }
@@ -192,11 +192,11 @@ func (o *smtpObserver) client(p []byte) {
 	o.clientLines = append(o.clientLines, p...)
 	for {
 		if o.bdatRemaining > 0 {
-			discard := uint64(len(o.clientLines))
+			discard := len(o.clientLines)
 			if discard > o.bdatRemaining {
 				discard = o.bdatRemaining
 			}
-			o.clientLines = o.clientLines[int(discard):]
+			o.clientLines = o.clientLines[discard:]
 			o.bdatRemaining -= discard
 			if o.bdatRemaining > 0 {
 				return
@@ -237,12 +237,12 @@ func (o *smtpObserver) client(p []byte) {
 				o.disabled = true
 				return
 			}
-			size, err := strconv.ParseUint(fields[1], 10, 63)
+			size, err := strconv.ParseInt(fields[1], 10, 32)
 			if err != nil {
 				o.disabled = true
 				return
 			}
-			o.bdatRemaining = size
+			o.bdatRemaining = int(size)
 		}
 	}
 }
