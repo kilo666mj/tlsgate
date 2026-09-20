@@ -51,11 +51,12 @@ type smtpCampaignRecord struct {
 }
 
 type smtpCampaignEvidence struct {
-	Client                              string
-	Start, PregreetAt, RejectAt, LastAt time.Time
-	Pregreet, Rejected                  bool
-	PregreetVerb                        string
-	EnvelopeFrom, EnvelopeTo, HELO      string
+	Client                                string
+	Start, PregreetAt, RejectAt, LastAt   time.Time
+	Pregreet, Rejected                    bool
+	PregreetVerb                          string
+	EnvelopeFrom, EnvelopeTo, HELO        string
+	sawPostscreenConnect, sawSMTPDConnect bool
 }
 
 type smtpNetworkPrefix struct {
@@ -263,7 +264,7 @@ func (e smtpCampaignEvidence) evidenceTime() time.Time {
 }
 
 var (
-	smtpCampaignEnvelope = regexp.MustCompile(`^(\S+)\s+\S+\s+(?:(?:[A-Za-z0-9_.-]+\[[0-9]+\]:\s+)?(?:[A-Z][a-z]{2}\s+[ 0-9][0-9]\s+[0-9:]{8}\s+[A-Za-z0-9_.-]+\s+)?)?(?:postfix|haproxy)/(?:postscreen|smtpd)\[[0-9]+\]:\s+([^\r\n]*)$`)
+	smtpCampaignEnvelope = regexp.MustCompile(`^(\S+)\s+\S+\s+(?:(?:[A-Za-z0-9_.-]+\[[0-9]+\]:\s+)?(?:[A-Z][a-z]{2}\s+[ 0-9][0-9]\s+[0-9:]{8}\s+[A-Za-z0-9_.-]+\s+)?)?(?:postfix|haproxy)/(postscreen|smtpd)\[[0-9]+\]:\s+([^\r\n]*)$`)
 	smtpCampaignConnect  = regexp.MustCompile(`^(?:CONNECT|connect) from (?:[^\[]*)?\[([^]]+)\]:(\d+)`)
 	smtpCampaignPregreet = regexp.MustCompile(`^PREGREET [0-9]+ after [^ ]+ from \[([^]]+)\]:(\d+):[ \t]*([A-Za-z]+)(?:[ \t]+([^\\\r\n \t]+))?`)
 	smtpCampaignReject   = regexp.MustCompile(`^NOQUEUE: reject: [A-Z]+ from (?:[^\[]*)?\[([^]]+)\]:(\d+):`)
@@ -296,15 +297,26 @@ func readSMTPCampaignEvidence(path string, maxLifetime time.Duration) ([]smtpCam
 			malformed++
 			continue
 		}
-		body := match[2]
+		service, body := match[2], match[3]
 		if connect := smtpCampaignConnect.FindStringSubmatch(body); connect != nil {
 			client, ok := canonicalClientTuple(connect[1], connect[2])
 			if !ok {
 				malformed++
 				continue
 			}
+			item := active[client]
+			if service == "smtpd" && item.sawPostscreenConnect && !item.sawSMTPDConnect &&
+				!at.Before(item.LastAt) && at.Sub(item.LastAt) <= maxLifetime {
+				item.sawSMTPDConnect = true
+				item.LastAt = at
+				active[client] = item
+				continue
+			}
 			flush(client)
-			active[client] = smtpCampaignEvidence{Client: client, Start: at, LastAt: at}
+			item = smtpCampaignEvidence{Client: client, Start: at, LastAt: at}
+			item.sawPostscreenConnect = service == "postscreen"
+			item.sawSMTPDConnect = service == "smtpd"
+			active[client] = item
 			continue
 		}
 		if pregreet := smtpCampaignPregreet.FindStringSubmatch(body); pregreet != nil {

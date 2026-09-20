@@ -183,6 +183,22 @@ func TestSMTPCampaignParsesPostfixSMTPDEvidence(t *testing.T) {
 	}
 }
 
+func TestSMTPCampaignCombinesPostscreenToSMTPDHandoff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "postfix.log")
+	data := "2026-09-20T09:30:11.351311+02:00 mx container[1]: Sep 20 09:30:11 container haproxy/postscreen[404]: CONNECT from [127.0.0.1]:54336 to [127.0.0.1]:2525\n" +
+		"2026-09-20T09:30:11.351451+02:00 mx container[1]: Sep 20 09:30:11 container postfix/smtpd[37917]: connect from localhost[127.0.0.1]:54336\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	evidence, malformed, err := readSMTPCampaignEvidence(path, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if malformed != 0 || len(evidence) != 1 || evidence[0].Client != "127.0.0.1:54336" {
+		t.Fatalf("evidence=%+v malformed=%d", evidence, malformed)
+	}
+}
+
 func TestSMTPNetworkPrefixesRequireCanonicalOfflineInput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "prefixes.json")
 	if err := os.WriteFile(path, []byte(`{"prefixes":[{"prefix":"192.0.2.1/24","provider":"test"}]}`), 0600); err != nil {
