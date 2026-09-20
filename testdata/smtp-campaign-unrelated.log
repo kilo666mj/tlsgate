@@ -1,0 +1,2 @@
+2026-09-19T22:58:19.500000Z mx haproxy/postscreen[404]: CONNECT from [203.0.113.145]:49552 to [127.0.0.1]:25
+2026-09-19T22:58:20Z mx haproxy/postscreen[404]: PREGREET 14 after 0.01 from [203.0.113.145]:49552: EHLO unrelated\r\n

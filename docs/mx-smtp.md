@@ -79,8 +79,12 @@ The repository includes:
 
 The collector snapshots complete input lines, waits for an event-age delay,
 and processes each concrete listener separately. Missing or ambiguous joins
-remain unmatched. Replay is idempotent. Reports are per listener, so unmatched
-counts from multiple reports must not be added together.
+remain unmatched. Replay is idempotent. It writes both the existing correlation
+report and a `campaign-latest-<listener-hash>.json` report from the offline
+classifier. Reports are per listener, so unmatched counts from multiple reports
+must not be added together. Pass `--network-prefixes` to the collector only for
+a reviewed local prefix file; campaign classification never performs live
+network enrichment.
 
 Use a root-owned directory for the event stream, MTA verdict stream, generated
 reports, and replay state. Rotate both input streams together. The observer

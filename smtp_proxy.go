@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,18 +19,19 @@ import (
 )
 
 type smtpEvent struct {
-	Version      int       `json:"version"`
-	Type         string    `json:"type"`
-	Timestamp    time.Time `json:"timestamp"`
-	Instance     string    `json:"instance"`
-	ConnectionID string    `json:"connection_id"`
-	Client       string    `json:"client"`
-	Listener     string    `json:"listener"`
-	Backend      string    `json:"backend"`
-	JA3          string    `json:"ja3,omitempty"`
-	JA4          string    `json:"ja4,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	State        string    `json:"state,omitempty"`
+	Version      int           `json:"version"`
+	Type         string        `json:"type"`
+	Timestamp    time.Time     `json:"timestamp"`
+	Instance     string        `json:"instance"`
+	ConnectionID string        `json:"connection_id"`
+	Client       string        `json:"client"`
+	Listener     string        `json:"listener"`
+	Backend      string        `json:"backend"`
+	JA3          string        `json:"ja3,omitempty"`
+	JA4          string        `json:"ja4,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	State        string        `json:"state,omitempty"`
+	Behavior     *smtpBehavior `json:"behavior,omitempty"`
 }
 
 type smtpEventWriter struct {
@@ -96,6 +99,9 @@ func logSMTPEvent(status string, e smtpEvent) {
 	if e.Error != "" {
 		details += fmt.Sprintf(" reason=%q", e.Error)
 	}
+	if e.Behavior != nil {
+		details += fmt.Sprintf(" behavior=%q", e.Behavior.Fingerprint)
+	}
 	log.Printf("%s smtp event=%q connection_id=%q client=%q listener=%q backend=%q%s",
 		status, e.Type, e.ConnectionID, e.Client, e.Listener, e.Backend, details)
 }
@@ -157,6 +163,16 @@ type smtpObserver struct {
 	refused, premature                        bool
 	greeted                                   bool
 	tlsBytes                                  []byte
+	bdatRemaining                             int
+	behavior                                  smtpBehaviorTracker
+	now                                       func() time.Time
+}
+
+func (o *smtpObserver) observedAt() time.Time {
+	if o.now != nil {
+		return o.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (o *smtpObserver) client(p []byte) {
@@ -169,21 +185,34 @@ func (o *smtpObserver) client(p []byte) {
 		o.observeTLS(p)
 		return
 	}
-	if len(o.clientLines) == 0 && !o.inData && len(p) > 0 && p[0] == recordTypeHandshake {
+	if len(o.clientLines) == 0 && !o.inData && o.bdatRemaining == 0 && len(p) > 0 && p[0] == recordTypeHandshake {
 		o.premature, o.disabled = true, true
 		return
 	}
 	o.clientLines = append(o.clientLines, p...)
-	if len(o.clientLines) > 64*1024 {
-		o.disabled = true
-		return
-	}
 	for {
-		i := strings.Index(string(o.clientLines), "\n")
+		if o.bdatRemaining > 0 {
+			discard := len(o.clientLines)
+			if discard > o.bdatRemaining {
+				discard = o.bdatRemaining
+			}
+			o.clientLines = o.clientLines[discard:]
+			o.bdatRemaining -= discard
+			if o.bdatRemaining > 0 {
+				return
+			}
+			continue
+		}
+		if len(o.clientLines) > 64*1024 {
+			o.disabled = true
+			return
+		}
+		i := bytes.IndexByte(o.clientLines, '\n')
 		if i < 0 {
 			return
 		}
-		line := strings.TrimRight(string(o.clientLines[:i+1]), "\r\n")
+		rawLine := string(o.clientLines[:i+1])
+		line := strings.TrimRight(rawLine, "\r\n")
 		o.clientLines = o.clientLines[i+1:]
 		if o.inData {
 			if line == "." {
@@ -196,15 +225,24 @@ func (o *smtpObserver) client(p []byte) {
 		if len(fields) == 0 {
 			continue
 		}
-		verb := strings.ToUpper(fields[0])
-		if verb == "BDAT" {
+		verb := canonicalSMTPVerb(fields[0])
+		o.behavior.command(rawLine, verb, o.greeted, o.observedAt())
+		if len(o.commands) >= 256 {
 			o.disabled = true
 			return
 		}
 		o.commands = append(o.commands, verb)
-		if len(o.commands) > 256 {
-			o.disabled = true
-			return
+		if verb == "BDAT" {
+			if len(fields) < 2 {
+				o.disabled = true
+				return
+			}
+			size, err := strconv.ParseInt(fields[1], 10, 32)
+			if err != nil {
+				o.disabled = true
+				return
+			}
+			o.bdatRemaining = int(size)
 		}
 	}
 }
@@ -249,9 +287,10 @@ func (o *smtpObserver) server(p []byte) {
 		if cmd == "STARTTLS" {
 			e := o.base
 			e.Type = "starttls"
-			e.Timestamp = time.Now().UTC()
+			e.Timestamp = o.observedAt()
 			if strings.HasPrefix(line, "220") {
 				e.State = "accepted"
+				o.behavior.starttlsOutcome = "accepted"
 				o.events.emit(e)
 				o.tlsArmed = true
 				o.clientLines = nil
@@ -261,6 +300,7 @@ func (o *smtpObserver) server(p []byte) {
 			}
 			e.State = "refused"
 			o.refused = true
+			o.behavior.starttlsOutcome = "refused"
 			o.events.emit(e)
 		}
 	}
@@ -288,10 +328,16 @@ func (o *smtpObserver) observeTLS(p []byte) {
 	o.fingerprinted = true
 	e := o.base
 	e.Type = "fingerprint"
-	e.Timestamp = time.Now().UTC()
+	e.Timestamp = o.observedAt()
 	e.JA3 = meta.JA3
 	e.JA4 = meta.JA4
 	o.events.emit(e)
+}
+
+func (o *smtpObserver) behaviorSnapshot() *smtpBehavior {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.behavior.snapshot(o.base.Timestamp, o.disabled)
 }
 
 func (o *smtpObserver) state() string {
@@ -406,6 +452,7 @@ func handleSMTPConn(client net.Conn, backend string, port int, method Fingerprin
 	o := &smtpObserver{method: method, events: events, base: base}
 	proxySMTPBidirectional(client, upstream, o)
 	end.State = o.state()
+	end.Behavior = o.behaviorSnapshot()
 }
 
 func proxySMTPBidirectional(client, upstream net.Conn, o *smtpObserver) {
