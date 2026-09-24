@@ -96,8 +96,11 @@ correlation window.
 
 Gatehub upload is opt-in. Enable `--report-gatehub` only after registering the
 TLSGate node and deploying a Gatehub version with the SMTP report endpoint.
-Successful manifests record `gatehub_reported: true`; a failed upload leaves
-the previous manifest in place and fails the oneshot service visibly.
+`report-smtp` retries transport errors, HTTP 429, and 5xx responses up to three
+times with backoff; Gatehub treats a repeated `replay_id` as a no-op. If an
+upload still fails, the collector publishes the local reports and manifest,
+records `gatehub_reported: false` for that listener, and then fails the oneshot
+service visibly.
 
 SMTP reports are isolated from Gatehub decisions and policy responses. They
 cannot approve or block a fingerprint and never promote spam/ham predictions

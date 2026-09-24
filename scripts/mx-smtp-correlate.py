@@ -164,6 +164,7 @@ def main():
         write_batch(work / "postfix.log", journal)
         generated_at = dt.datetime.now(dt.timezone.utc)
         published = []
+        upload_failures = []
         for listener in listeners:
             slug = hashlib.sha256(listener.encode()).hexdigest()[:16]
             report = work / f"latest-{slug}.json"
@@ -177,13 +178,18 @@ def main():
             os.chmod(report, 0o600)
             destination = output / report.name
             if args.report_gatehub:
-                subprocess.run([
+                # An upload failure must not withhold the local report or the
+                # remaining listeners; it is reported after publishing.
+                upload = subprocess.run([
                     args.tlsgate, "report-smtp", "--config", args.config,
                     "--report", str(report), "--smtp-instance", args.instance,
                     "--listener", listener, "--coverage-start", start.isoformat(),
                     "--coverage-end", cutoff.isoformat(),
-                    "--generated-at", generated_at.isoformat()], check=True)
-                published.append(listener)
+                    "--generated-at", generated_at.isoformat()])
+                if upload.returncode == 0:
+                    published.append(listener)
+                else:
+                    upload_failures.append(listener)
             os.replace(report, destination)
             campaign_report = work / f"campaign-latest-{slug}.json"
             campaign_command = [
@@ -205,6 +211,8 @@ def main():
                                                        "gatehub_reported": x in published} for x in listeners]}, separators=(",", ":")) + "\n")
         os.chmod(manifest, 0o600)
         os.replace(manifest, output / "latest.json")
+    if upload_failures:
+        raise SystemExit("Gatehub upload failed for listener(s): " + ", ".join(upload_failures))
 
 
 if __name__ == "__main__":

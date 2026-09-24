@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -161,7 +162,16 @@ func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener
 	return report, nil
 }
 
-func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpReportEnvelope, client *http.Client) (err error) {
+// smtpReportRetryDelays bounds retries of transient upload failures. Gatehub
+// treats a repeated replay_id as a no-op, so resending the same report is safe.
+var smtpReportRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
+
+type retryableSMTPReportError struct{ err error }
+
+func (e retryableSMTPReportError) Error() string { return e.err.Error() }
+func (e retryableSMTPReportError) Unwrap() error { return e.err }
+
+func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpReportEnvelope, client *http.Client) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -180,7 +190,34 @@ func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpR
 	q := u.Query()
 	q.Set("instance_id", cfg.InstanceID)
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if client == nil {
+		client, err = smtpReportHTTPClient(cfg)
+		if err != nil {
+			return err
+		}
+	}
+	for attempt := 0; ; attempt++ {
+		err = postSMTPReport(ctx, cfg, u.String(), body, client)
+		var retryable retryableSMTPReportError
+		if err == nil || !errors.As(err, &retryable) || attempt >= len(smtpReportRetryDelays) {
+			if err != nil && attempt > 0 {
+				return fmt.Errorf("after %d attempts: %w", attempt+1, err)
+			}
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "retrying SMTP report upload after attempt %d: %v\n", attempt+1, err)
+		timer := time.NewTimer(smtpReportRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func postSMTPReport(ctx context.Context, cfg controlplane.Config, endpoint string, body []byte, client *http.Client) (err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -188,22 +225,23 @@ func uploadSMTPReport(ctx context.Context, cfg controlplane.Config, report smtpR
 	if cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	}
-	if client == nil {
-		client, err = smtpReportHTTPClient(cfg)
-		if err != nil {
-			return err
-		}
-	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return err
+		}
+		return retryableSMTPReportError{err}
 	}
 	defer closeWithError(&err, "close Gatehub SMTP report response", resp.Body.Close)
 	if resp.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("POST SMTP report returned %s (instance %q not registered with gatehub?)", resp.Status, cfg.InstanceID)
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("POST SMTP report returned %s", resp.Status)
+		err = fmt.Errorf("POST SMTP report returned %s", resp.Status)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			return retryableSMTPReportError{err}
+		}
+		return err
 	}
 	return nil
 }
