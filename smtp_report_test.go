@@ -126,3 +126,65 @@ func TestSMTPReportWireGolden(t *testing.T) {
 		t.Fatalf("SMTP report wire format changed; update both Gatehub and the golden fixture\ngot replay_id=%s", report.ReplayID)
 	}
 }
+
+func TestSMTPReportUploadRetriesTransientFailures(t *testing.T) {
+	saved := smtpReportRetryDelays
+	smtpReportRetryDelays = []time.Duration{0, 0, 0}
+	t.Cleanup(func() { smtpReportRetryDelays = saved })
+	cfg := controlplane.Config{URL: "https://gatehub.example", InstanceID: "mail-tls", Token: "token"}
+	report := smtpReportEnvelope{ReplayID: strings.Repeat("a", 64)}
+	respond := func(code int) (*http.Response, error) {
+		return &http.Response{StatusCode: code, Status: fmt.Sprintf("%d %s", code, http.StatusText(code)), Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	}
+
+	for _, tc := range []struct {
+		name     string
+		steps    []func() (*http.Response, error)
+		attempts int
+		wantErr  string
+	}{
+		{"timeout then success", []func() (*http.Response, error){
+			func() (*http.Response, error) {
+				return nil, fmt.Errorf("Client.Timeout exceeded while awaiting headers")
+			},
+			func() (*http.Response, error) { return respond(530) },
+			func() (*http.Response, error) { return respond(http.StatusOK) },
+		}, 3, ""},
+		{"exhausted", []func() (*http.Response, error){
+			func() (*http.Response, error) { return respond(http.StatusBadGateway) },
+		}, 4, "after 4 attempts: POST SMTP report returned 502"},
+		{"client error is not retried", []func() (*http.Response, error){
+			func() (*http.Response, error) { return respond(http.StatusBadRequest) },
+		}, 1, "POST SMTP report returned 400"},
+		{"forbidden is not retried", []func() (*http.Response, error){
+			func() (*http.Response, error) { return respond(http.StatusForbidden) },
+		}, 1, "not registered with gatehub"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			var bodies []string
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				b, _ := io.ReadAll(r.Body)
+				bodies = append(bodies, string(b))
+				step := tc.steps[min(attempts, len(tc.steps)-1)]
+				attempts++
+				return step()
+			})}
+			err := uploadSMTPReport(t.Context(), cfg, report, client)
+			if attempts != tc.attempts {
+				t.Fatalf("attempts = %d, want %d", attempts, tc.attempts)
+			}
+			if tc.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+			}
+			for _, b := range bodies[1:] {
+				if b != bodies[0] {
+					t.Fatal("retry changed the request body")
+				}
+			}
+		})
+	}
+}
