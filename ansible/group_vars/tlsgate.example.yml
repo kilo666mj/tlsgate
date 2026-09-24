@@ -46,3 +46,27 @@ control_plane: {}
 # Optional additional isolated processes on the same host. Each gets an
 # independent connection budget, database, metrics endpoint, and Gatehub node.
 tlsgate_extra_instances: []
+
+# Optional report-only SMTP correlation collector. Enabling it installs the
+# repository collector, hardened systemd units, and logrotate policy.
+tlsgate_smtp_collector_enabled: false
+tlsgate_smtp_collector_events: /var/lib/tlsgate/smtp-events.jsonl
+tlsgate_smtp_collector_verdicts: /var/log/rspamd/tlsgate-verdicts.jsonl
+tlsgate_smtp_collector_output: /var/lib/tlsgate/correlation
+tlsgate_smtp_collector_instance: mx-public-smtp
+tlsgate_smtp_collector_report_gatehub: false
+tlsgate_smtp_collector_network_prefixes: ""
+tlsgate_smtp_collector_calendar: "*:0/5"
+tlsgate_smtp_collector_randomized_delay: 15s
+tlsgate_smtp_collector_event_rotate_user: tlsgate
+tlsgate_smtp_collector_event_rotate_group: tlsgate
+tlsgate_smtp_collector_verdict_rotate_user: rspamd
+tlsgate_smtp_collector_verdict_rotate_group: rspamd
+
+# Optionally install a reviewed Rspamd exporter. Loading/reloading it remains
+# the MTA deployment's responsibility because that mechanism is site-specific.
+tlsgate_smtp_rspamd_exporter_enabled: false
+tlsgate_smtp_rspamd_exporter_source: rspamd-tlsgate.lua
+tlsgate_smtp_rspamd_exporter_destination: /etc/rspamd/tlsgate.lua
+tlsgate_smtp_rspamd_exporter_owner: root
+tlsgate_smtp_rspamd_exporter_group: root

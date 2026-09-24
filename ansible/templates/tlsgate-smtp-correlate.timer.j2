@@ -1,0 +1,12 @@
+[Unit]
+Description=Run tlsgate SMTP correlation on schedule
+
+[Timer]
+OnCalendar={{ tlsgate_smtp_collector_calendar | default('*:0/5') }}
+Persistent=true
+RandomizedDelaySec={{ tlsgate_smtp_collector_randomized_delay | default('15s') }}
+AccuracySec=1s
+Unit=tlsgate-smtp-correlate.service
+
+[Install]
+WantedBy=timers.target

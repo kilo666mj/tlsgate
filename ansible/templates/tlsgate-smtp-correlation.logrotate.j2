@@ -1,0 +1,22 @@
+{{ tlsgate_smtp_collector_events | default('/var/lib/tlsgate/smtp-events.jsonl') }} {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    nocompress
+    su {{ tlsgate_smtp_collector_event_rotate_user | default('tlsgate') }} {{ tlsgate_smtp_collector_event_rotate_group | default('tlsgate') }}
+    create 0600 {{ tlsgate_smtp_collector_event_rotate_user | default('tlsgate') }} {{ tlsgate_smtp_collector_event_rotate_group | default('tlsgate') }}
+    sharedscripts
+    postrotate
+        /usr/bin/systemctl reload tlsgate.service
+    endscript
+}
+
+{{ tlsgate_smtp_collector_verdicts | default('/var/log/rspamd/tlsgate-verdicts.jsonl') }} {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    nocompress
+    create 0640 {{ tlsgate_smtp_collector_verdict_rotate_user | default('rspamd') }} {{ tlsgate_smtp_collector_verdict_rotate_group | default('rspamd') }}
+}

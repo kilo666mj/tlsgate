@@ -77,6 +77,13 @@ The repository includes:
 - `examples/systemd/tlsgate-smtp-correlate.service` and `.timer`; and
 - `examples/logrotate/tlsgate-smtp-correlation`.
 
+The Ansible playbook can manage these assets with
+`tlsgate_smtp_collector_enabled: true`. Configure the input/output paths,
+instance, timer schedule, Gatehub upload, and optional Rspamd exporter through
+the `tlsgate_smtp_collector_*` and `tlsgate_smtp_rspamd_exporter_*` variables
+documented in `ansible/group_vars/tlsgate.example.yml`. The feature is disabled
+by default, so non-SMTP deployments are unchanged.
+
 The collector snapshots complete input lines, waits for an event-age delay,
 and processes each concrete listener separately. Missing or ambiguous joins
 remain unmatched. Replay is idempotent. It writes both the existing correlation
@@ -105,6 +112,10 @@ service visibly.
 SMTP reports are isolated from Gatehub decisions and policy responses. They
 cannot approve or block a fingerprint and never promote spam/ham predictions
 into the shared TLS fingerprint store.
+
+The scheduled collector includes the matching bounded campaign report in each
+upload. Gatehub validates and displays its signature counts and evidence, but
+does not create or distribute decisions from them.
 
 ## Operations and rollback
 

@@ -271,16 +271,22 @@ batch collector, not a log-tailing daemon. No automatic block rules are created.
 ## Gatehub reporting
 
 `tlsgate report-smtp` uploads one bounded rolling-window report to Gatehub's
-dedicated `/v1/smtp/reports` endpoint. It uses the same HTTPS, bearer-token or
-mTLS credentials as the normal control-plane client. The authenticated node
-identity, SMTP event namespace, exact listener, coverage interval, generation
-time and content-derived replay ID are included explicitly.
+dedicated `/v1/smtp/reports` endpoint. Pass `--campaign-report` with the
+matching `classify-smtp` JSON output to include bounded report-only non-TLS
+campaign evidence in the same authenticated envelope. TLSGate validates that
+the campaign schema, SMTP namespace, and exact listener match before upload.
+It uses the same HTTPS, bearer-token or mTLS credentials as the normal
+control-plane client. The authenticated node identity, SMTP event namespace,
+exact listener, coverage interval, generation time and content-derived replay
+ID are included explicitly.
 
 This endpoint is report-only. Its response carries no decisions, and TLSGate
 does not copy spam or ham predictions into the fingerprint approval database.
 Unknown classifications and unmatched reasons remain separate in the payload.
-At most 256 fingerprint aggregates and 256 evidence records are sent, with
-truncation counts; the encoded request is capped at 1 MiB.
+At most 256 fingerprint aggregates, 256 correlation records, and 256 campaign
+records are sent, with truncation counts; the encoded request is capped at
+1 MiB. Campaign records retain only the classifier's bounded fields; raw HELO,
+envelope, recipient, DNSBL, geography, and blocker log values are not added.
 
 The collector keeps upload disabled by default. Add `--report-gatehub` to its
 systemd `ExecStart` only after the Gatehub SMTP report endpoint is available.

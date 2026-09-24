@@ -29,18 +29,20 @@ const (
 )
 
 type smtpReportEnvelope struct {
-	SchemaVersion int         `json:"schema_version"`
-	InstanceID    string      `json:"instance_id"`
-	SMTPInstance  string      `json:"smtp_instance"`
-	Listener      string      `json:"listener"`
-	CoverageStart time.Time   `json:"coverage_start"`
-	CoverageEnd   time.Time   `json:"coverage_end"`
-	GeneratedAt   time.Time   `json:"generated_at"`
-	ReplayID      string      `json:"replay_id"`
-	Summary       smtpSummary `json:"summary"`
+	SchemaVersion int                 `json:"schema_version"`
+	InstanceID    string              `json:"instance_id"`
+	SMTPInstance  string              `json:"smtp_instance"`
+	Listener      string              `json:"listener"`
+	CoverageStart time.Time           `json:"coverage_start"`
+	CoverageEnd   time.Time           `json:"coverage_end"`
+	GeneratedAt   time.Time           `json:"generated_at"`
+	ReplayID      string              `json:"replay_id"`
+	Summary       smtpSummary         `json:"summary"`
+	Campaign      *smtpCampaignReport `json:"campaign,omitempty"`
 	Truncated     struct {
-		Fingerprints int `json:"fingerprints"`
-		Records      int `json:"records"`
+		Fingerprints    int `json:"fingerprints"`
+		Records         int `json:"records"`
+		CampaignRecords int `json:"campaign_records,omitempty"`
 	} `json:"truncated"`
 }
 
@@ -48,6 +50,7 @@ func cmdReportSMTP(args []string) {
 	fs := flag.NewFlagSet("report-smtp", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfig, "JSON config containing control_plane credentials")
 	reportPath := fs.String("report", "", "correlate-smtp JSON report")
+	campaignReportPath := fs.String("campaign-report", "", "optional classify-smtp JSON report")
 	smtpInstance := fs.String("smtp-instance", "", "SMTP event namespace")
 	listener := fs.String("listener", "", "exact SMTP listener endpoint")
 	coverageStart := fs.String("coverage-start", "", "inclusive RFC3339 window start")
@@ -64,7 +67,7 @@ func cmdReportSMTP(args []string) {
 	if !cfg.ControlPlane.Enabled() {
 		fatalf("control plane is disabled")
 	}
-	report, err := readSMTPReport(*reportPath, cfg.ControlPlane, *smtpInstance, *listener, *coverageStart, *coverageEnd, *generatedAt)
+	report, err := readSMTPReport(*reportPath, *campaignReportPath, cfg.ControlPlane, *smtpInstance, *listener, *coverageStart, *coverageEnd, *generatedAt)
 	if err != nil {
 		fatalf("load SMTP report: %v", err)
 	}
@@ -74,7 +77,7 @@ func cmdReportSMTP(args []string) {
 	fmt.Printf("uploaded SMTP report replay_id=%s listener=%s\n", report.ReplayID, report.Listener)
 }
 
-func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener, start, end, generated string) (_ smtpReportEnvelope, err error) {
+func readSMTPReport(path, campaignPath string, cfg controlplane.Config, smtpInstance, listener, start, end, generated string) (_ smtpReportEnvelope, err error) {
 	if err := cfg.Validate(); err != nil {
 		return smtpReportEnvelope{}, err
 	}
@@ -138,15 +141,28 @@ func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener
 		report.Truncated.Records = len(report.Summary.Records) - maxSMTPReportItems
 		report.Summary.Records = report.Summary.Records[:maxSMTPReportItems]
 	}
+	if campaignPath != "" {
+		campaign, err := readSMTPCampaignReport(campaignPath, smtpInstance, listener)
+		if err != nil {
+			return smtpReportEnvelope{}, fmt.Errorf("load SMTP campaign report: %w", err)
+		}
+		if len(campaign.Records) > maxSMTPReportItems {
+			report.Truncated.CampaignRecords = len(campaign.Records) - maxSMTPReportItems
+			campaign.Records = campaign.Records[:maxSMTPReportItems]
+		}
+		report.Campaign = &campaign
+	}
 	canonical, err := json.Marshal(struct {
 		Instance, Listener string
 		Start, End         time.Time
 		Summary            smtpSummary
+		Campaign           *smtpCampaignReport `json:",omitempty"`
 		Truncated          struct {
-			Fingerprints int `json:"fingerprints"`
-			Records      int `json:"records"`
+			Fingerprints    int `json:"fingerprints"`
+			Records         int `json:"records"`
+			CampaignRecords int `json:"campaign_records,omitempty"`
 		}
-	}{smtpInstance, listener, coverageStart, coverageEnd, report.Summary, report.Truncated})
+	}{smtpInstance, listener, coverageStart, coverageEnd, report.Summary, report.Campaign, report.Truncated})
 	if err != nil {
 		return smtpReportEnvelope{}, err
 	}
@@ -160,6 +176,79 @@ func readSMTPReport(path string, cfg controlplane.Config, smtpInstance, listener
 		return smtpReportEnvelope{}, fmt.Errorf("bounded report is %d bytes (maximum %d)", len(body), maxSMTPReportBody)
 	}
 	return report, nil
+}
+
+func readSMTPCampaignReport(path, smtpInstance, listener string) (_ smtpCampaignReport, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return smtpCampaignReport{}, err
+	}
+	defer closeWithError(&err, "close SMTP campaign report", f.Close)
+	info, err := f.Stat()
+	if err != nil {
+		return smtpCampaignReport{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return smtpCampaignReport{}, fmt.Errorf("campaign report is not a regular file")
+	}
+	if info.Size() > maxSMTPReportInput {
+		return smtpCampaignReport{}, fmt.Errorf("campaign report is %d bytes (maximum %d)", info.Size(), maxSMTPReportInput)
+	}
+	var campaign smtpCampaignReport
+	dec := json.NewDecoder(io.LimitReader(f, maxSMTPReportInput+1))
+	if err := dec.Decode(&campaign); err != nil {
+		return smtpCampaignReport{}, err
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return smtpCampaignReport{}, fmt.Errorf("campaign report must contain one JSON value")
+	}
+	if err := validateSMTPCampaignReport(campaign, smtpInstance, listener); err != nil {
+		return smtpCampaignReport{}, err
+	}
+	return campaign, nil
+}
+
+func validateSMTPCampaignReport(report smtpCampaignReport, smtpInstance, listener string) error {
+	if report.Schema != smtpCampaignReportSchema {
+		return fmt.Errorf("unsupported campaign schema %q", report.Schema)
+	}
+	if report.Instance != smtpInstance || report.Listener != listener {
+		return fmt.Errorf("campaign report identity does not match SMTP report")
+	}
+	counts := []int{report.Connections, report.EvidenceSessions, report.Matched, report.Unmatched, report.ConnectionsWithoutEvidence, report.MalformedEvents, report.MalformedLogLines}
+	for _, count := range counts {
+		if count < 0 {
+			return fmt.Errorf("campaign report counts must be non-negative")
+		}
+	}
+	if report.Matched+report.Unmatched != report.EvidenceSessions || report.ConnectionsWithoutEvidence > report.Connections {
+		return fmt.Errorf("inconsistent campaign report counts")
+	}
+	if len(report.Records) != report.EvidenceSessions || len(report.Signatures) == 0 || len(report.Signatures) > 32 {
+		return fmt.Errorf("inconsistent campaign report evidence")
+	}
+	known := make(map[string]bool, len(report.Signatures))
+	for _, signature := range report.Signatures {
+		if signature == "" || len(signature) > 128 || known[signature] {
+			return fmt.Errorf("invalid campaign signature")
+		}
+		known[signature] = true
+	}
+	if report.Signature != "" && !known[report.Signature] {
+		return fmt.Errorf("campaign primary signature is not declared")
+	}
+	for _, record := range report.Records {
+		if record.Timestamp.IsZero() || len(record.Client) > 256 || len(record.ConnectionID) > 128 || len(record.BehaviorFingerprint) > 128 || len(record.Signature) > 128 || len(record.Reason) > 128 || len(record.Provider) > 128 || len(record.NetworkPrefix) > 128 || len(record.RecipientCluster) > 128 {
+			return fmt.Errorf("invalid campaign evidence")
+		}
+		if _, _, err := net.SplitHostPort(record.Client); err != nil {
+			return fmt.Errorf("campaign evidence client must be an exact IP:port endpoint: %w", err)
+		}
+		if record.Signature != "" && !known[record.Signature] {
+			return fmt.Errorf("campaign evidence signature is not declared")
+		}
+	}
+	return nil
 }
 
 // smtpReportRetryDelays bounds retries of transient upload failures. Gatehub

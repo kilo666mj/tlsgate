@@ -109,18 +109,23 @@ def bounded_command(argv):
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     data = bytearray()
     assert process.stdout is not None
-    while True:
-        chunk = process.stdout.read(min(1024 * 1024, MAX_BYTES + 1 - len(data)))
-        if not chunk:
-            break
-        data.extend(chunk)
-        if len(data) > MAX_BYTES:
-            process.kill()
-            process.wait()
-            raise RuntimeError("journal snapshot exceeds 64 MiB")
-    stderr = process.stderr.read() if process.stderr else b""
-    if process.wait() != 0:
-        raise RuntimeError("journalctl failed: " + stderr.decode(errors="replace").strip())
+    try:
+        while True:
+            chunk = process.stdout.read(min(1024 * 1024, MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > MAX_BYTES:
+                process.kill()
+                process.wait()
+                raise RuntimeError("journal snapshot exceeds 64 MiB")
+        stderr = process.stderr.read() if process.stderr else b""
+        if process.wait() != 0:
+            raise RuntimeError("journalctl failed: " + stderr.decode(errors="replace").strip())
+    finally:
+        process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
     lines = bytes(data).splitlines(keepends=True)
     if len(lines) > MAX_LINES:
         raise RuntimeError("journal snapshot exceeds 100000 lines")
@@ -177,20 +182,6 @@ def main():
                     check=True, stdout=out)
             os.chmod(report, 0o600)
             destination = output / report.name
-            if args.report_gatehub:
-                # An upload failure must not withhold the local report or the
-                # remaining listeners; it is reported after publishing.
-                upload = subprocess.run([
-                    args.tlsgate, "report-smtp", "--config", args.config,
-                    "--report", str(report), "--smtp-instance", args.instance,
-                    "--listener", listener, "--coverage-start", start.isoformat(),
-                    "--coverage-end", cutoff.isoformat(),
-                    "--generated-at", generated_at.isoformat()])
-                if upload.returncode == 0:
-                    published.append(listener)
-                else:
-                    upload_failures.append(listener)
-            os.replace(report, destination)
             campaign_report = work / f"campaign-latest-{slug}.json"
             campaign_command = [
                 args.tlsgate, "classify-smtp", "--events", str(work / "events.jsonl"),
@@ -201,6 +192,21 @@ def main():
             with campaign_report.open("wb") as out:
                 subprocess.run(campaign_command, check=True, stdout=out)
             os.chmod(campaign_report, 0o600)
+            if args.report_gatehub:
+                # An upload failure must not withhold the local report or the
+                # remaining listeners; it is reported after publishing.
+                upload = subprocess.run([
+                    args.tlsgate, "report-smtp", "--config", args.config,
+                    "--report", str(report), "--smtp-instance", args.instance,
+                    "--campaign-report", str(campaign_report),
+                    "--listener", listener, "--coverage-start", start.isoformat(),
+                    "--coverage-end", cutoff.isoformat(),
+                    "--generated-at", generated_at.isoformat()])
+                if upload.returncode == 0:
+                    published.append(listener)
+                else:
+                    upload_failures.append(listener)
+            os.replace(report, destination)
             os.replace(campaign_report, output / campaign_report.name)
         manifest = work / "latest.json"
         manifest.write_text(json.dumps({"generated_at": generated_at.isoformat(),
