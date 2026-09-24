@@ -222,7 +222,7 @@ second. Missing and overlapping candidates remain visible as
 `no_exact_connection` or `ambiguous_exact_connection`; there is no IP-only or
 nearest-time fallback.
 
-The initial signature is
+The classifier currently emits two signatures. The first is
 `smtp/pregreet-helo-support-selfdomain/v1`. It requires all of the following:
 
 1. TLSGate behavior v1 observed one or more pre-greeting commands and `HELO`
@@ -237,6 +237,15 @@ This intentionally excludes unrelated Postscreen rule-5/PREGREET traffic,
 and recipient clustering are context only and never make a record match. Raw
 sender, HELO, and recipient values are omitted from output; the recipient is a
 lowercase SHA-256 cluster identifier.
+
+The second signature is `smtp/pregreet-ehlo-user/v1`. It requires both TLSGate
+behavior v1 and Postscreen on the exact joined tuple to observe a pre-greeting
+`EHLO`, and Postscreen's bounded first argument must equal `User`
+case-insensitively. A TLSGate behavior fingerprint alone is insufficient: it
+deliberately omits SMTP arguments and therefore represents a broader family.
+The raw EHLO argument is never retained or emitted. DNSBL results, source
+geography, and an external blocker's decision are context only and are not
+required for this report-only signature.
 
 Optional network context comes only from an operator-supplied regular JSON file
 of at most 1 MiB. Prefixes must be canonical CIDRs; the longest match wins:
