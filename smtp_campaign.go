@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	smtpCampaignReportSchema = "smtp-campaign-report/v1"
-	pregreetSupportSignature = "smtp/pregreet-helo-support-selfdomain/v1"
-	maxSMTPPrefixInput       = 1 << 20
+	smtpCampaignReportSchema  = "smtp-campaign-report/v1"
+	pregreetSupportSignature  = "smtp/pregreet-helo-support-selfdomain/v1"
+	pregreetEHLOUserSignature = "smtp/pregreet-ehlo-user/v1"
+	maxSMTPPrefixInput        = 1 << 20
 )
 
 type smtpCampaignReport struct {
@@ -28,6 +29,7 @@ type smtpCampaignReport struct {
 	Instance                   string               `json:"instance"`
 	Listener                   string               `json:"listener"`
 	Signature                  string               `json:"signature"`
+	Signatures                 []string             `json:"signatures,omitempty"`
 	Connections                int                  `json:"connections"`
 	EvidenceSessions           int                  `json:"evidence_sessions"`
 	Matched                    int                  `json:"matched"`
@@ -55,6 +57,7 @@ type smtpCampaignEvidence struct {
 	Start, PregreetAt, RejectAt, LastAt   time.Time
 	Pregreet, Rejected                    bool
 	PregreetVerb                          string
+	PregreetEHLOUser                      bool
 	EnvelopeFrom, EnvelopeTo, HELO        string
 	sawPostscreenConnect, sawSMTPDConnect bool
 }
@@ -100,8 +103,8 @@ func cmdClassifySMTP(args []string) {
 	}
 	fmt.Printf("connections=%d evidence_sessions=%d matched=%d unmatched=%d connections_without_evidence=%d\n",
 		report.Connections, report.EvidenceSessions, report.Matched, report.Unmatched, report.ConnectionsWithoutEvidence)
-	fmt.Printf("malformed_events=%d malformed_log_lines=%d signature=%s\n",
-		report.MalformedEvents, report.MalformedLogLines, report.Signature)
+	fmt.Printf("malformed_events=%d malformed_log_lines=%d signatures=%s\n",
+		report.MalformedEvents, report.MalformedLogLines, strings.Join(report.Signatures, ","))
 	for _, record := range report.Records {
 		fmt.Printf("campaign client=%q connection_id=%q signature=%q reason=%q provider=%q recipient_cluster=%q\n",
 			record.Client, record.ConnectionID, record.Signature, record.Reason, record.Provider, record.RecipientCluster)
@@ -161,6 +164,7 @@ func runSMTPCampaignClassification(eventsPath, postfixPath, prefixPath, instance
 	report := smtpCampaignReport{
 		Schema: smtpCampaignReportSchema, Instance: instance, Listener: listener,
 		Signature: pregreetSupportSignature, Connections: len(connections), EvidenceSessions: len(evidence),
+		Signatures:      []string{pregreetSupportSignature, pregreetEHLOUserSignature},
 		MalformedEvents: malformedEvents, MalformedLogLines: malformedLogs,
 	}
 	byClient := make(map[string][]smtpConnRecord)
@@ -186,9 +190,8 @@ func runSMTPCampaignClassification(eventsPath, postfixPath, prefixPath, instance
 			if connection.Behavior != nil {
 				record.BehaviorFingerprint = connection.Behavior.Fingerprint
 			}
-			record.Reason = classifySMTPCampaign(connection.Behavior, item)
+			record.Signature, record.Reason = classifySMTPCampaignSignature(connection.Behavior, item)
 			if record.Reason == "matched" {
-				record.Signature = pregreetSupportSignature
 				report.Matched++
 			} else {
 				report.Unmatched++
@@ -232,26 +235,35 @@ func matchingSMTPConnections(candidates []smtpConnRecord, evidence smtpCampaignE
 }
 
 func classifySMTPCampaign(behavior *smtpBehavior, evidence smtpCampaignEvidence) string {
+	_, reason := classifySMTPCampaignSignature(behavior, evidence)
+	return reason
+}
+
+func classifySMTPCampaignSignature(behavior *smtpBehavior, evidence smtpCampaignEvidence) (string, string) {
 	if !validSMTPBehavior(behavior) {
-		return "missing_or_invalid_behavior"
+		return "", "missing_or_invalid_behavior"
+	}
+	if behavior.PreGreeting != "none" && behavior.FirstVerb == "EHLO" &&
+		evidence.Pregreet && evidence.PregreetVerb == "EHLO" && evidence.PregreetEHLOUser {
+		return pregreetEHLOUserSignature, "matched"
 	}
 	if behavior.PreGreeting == "none" || behavior.FirstVerb != "HELO" {
-		return "behavior_not_pregreet_helo"
+		return "", "behavior_not_pregreet_helo"
 	}
 	if !evidence.Pregreet || evidence.PregreetVerb != "HELO" {
-		return "postscreen_not_pregreet_helo"
+		return "", "postscreen_not_pregreet_helo"
 	}
 	if !evidence.Rejected {
-		return "no_rejection_evidence"
+		return "", "no_rejection_evidence"
 	}
 	local, domain := splitMailbox(evidence.EnvelopeFrom)
 	if !strings.EqualFold(local, "support") || domain == "" {
-		return "sender_not_support_domain"
+		return "", "sender_not_support_domain"
 	}
 	if canonicalDomain(evidence.HELO) != domain {
-		return "helo_sender_domain_mismatch"
+		return "", "helo_sender_domain_mismatch"
 	}
-	return "matched"
+	return pregreetSupportSignature, "matched"
 }
 
 func (e smtpCampaignEvidence) evidenceTime() time.Time {
@@ -335,6 +347,7 @@ func readSMTPCampaignEvidence(path string, maxLifetime time.Duration) ([]smtpCam
 			}
 			item.Pregreet, item.PregreetAt, item.LastAt = true, at, at
 			item.PregreetVerb = canonicalSMTPVerb(pregreet[3])
+			item.PregreetEHLOUser = item.PregreetVerb == "EHLO" && strings.EqualFold(pregreet[4], "user")
 			active[client] = item
 			continue
 		}

@@ -70,7 +70,7 @@ func TestSMTPCampaignNeverFallsBackToIPOnly(t *testing.T) {
 func TestSMTPCampaignUnrelatedRule5FixtureDoesNotMatch(t *testing.T) {
 	start := time.Date(2026, 9, 19, 22, 58, 19, 0, time.UTC)
 	events := writeCampaignEvents(t, []smtpConnFixture{{
-		id: "unrelated", client: "203.0.113.145:49552", start: start, end: start.Add(4 * time.Second), behavior: campaignBehavior(start, "EHLO", true),
+		id: "other-ehlo", client: "203.0.113.145:49552", start: start, end: start.Add(4 * time.Second), behavior: campaignBehavior(start, "EHLO", true),
 	}})
 	report, err := runSMTPCampaignClassification(events, "testdata/smtp-campaign-unrelated.log", "", "mx", "127.0.0.1:25", 10*time.Minute, time.Second)
 	if err != nil {
@@ -78,6 +78,42 @@ func TestSMTPCampaignUnrelatedRule5FixtureDoesNotMatch(t *testing.T) {
 	}
 	if report.Matched != 0 || len(report.Records) != 1 || report.Records[0].Signature != "" {
 		t.Fatalf("unrelated pregreet traffic matched campaign: %+v", report)
+	}
+	wire, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("unrelated")) {
+		t.Fatalf("report leaked the raw EHLO argument: %s", wire)
+	}
+}
+
+func TestSMTPCampaignEHLOUserSignature(t *testing.T) {
+	start := time.Date(2026, 9, 23, 17, 36, 19, 0, time.UTC)
+	client := "198.51.100.49:60736"
+	events := writeCampaignEvents(t, []smtpConnFixture{{
+		id: "ehlo-user", client: client, start: start, end: start.Add(16 * time.Second), behavior: campaignBehavior(start, "EHLO", true),
+	}})
+	postfix := filepath.Join(t.TempDir(), "postfix.log")
+	data := "2026-09-23T17:36:19.004Z mx haproxy/postscreen[402]: CONNECT from [198.51.100.49]:60736 to [127.0.0.1]:25\n" +
+		"2026-09-23T17:36:20.189Z mx haproxy/postscreen[402]: PREGREET 11 after 0.2 from [198.51.100.49]:60736: EHLO User\\r\\n\n"
+	if err := os.WriteFile(postfix, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := runSMTPCampaignClassification(events, postfix, "", "mx", "127.0.0.1:25", 10*time.Minute, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Matched != 1 || report.Unmatched != 0 || len(report.Records) != 1 {
+		t.Fatalf("unexpected report: %+v", report)
+	}
+	record := report.Records[0]
+	if record.ConnectionID != "ehlo-user" || record.Signature != pregreetEHLOUserSignature || record.Reason != "matched" {
+		t.Fatalf("unexpected EHLO User record: %+v", record)
+	}
+	if !reflect.DeepEqual(report.Signatures, []string{pregreetSupportSignature, pregreetEHLOUserSignature}) {
+		t.Fatalf("unexpected signatures: %v", report.Signatures)
 	}
 }
 
