@@ -144,7 +144,9 @@ func TestSMTPReportUploadRetriesTransientFailures(t *testing.T) {
 		wantErr  string
 	}{
 		{"timeout then success", []func() (*http.Response, error){
-			func() (*http.Response, error) { return nil, fmt.Errorf("Client.Timeout exceeded while awaiting headers") },
+			func() (*http.Response, error) {
+				return nil, fmt.Errorf("Client.Timeout exceeded while awaiting headers")
+			},
 			func() (*http.Response, error) { return respond(530) },
 			func() (*http.Response, error) { return respond(http.StatusOK) },
 		}, 3, ""},
