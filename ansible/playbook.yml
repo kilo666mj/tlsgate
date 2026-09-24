@@ -229,6 +229,88 @@
       loop_control:
         label: "{{ item.name }}"
 
+    - name: Create SMTP correlation output directory
+      ansible.builtin.file:
+        path: "{{ tlsgate_smtp_collector_output | default('/var/lib/tlsgate/correlation') }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+
+    - name: Install SMTP correlation collector
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/mx-smtp-correlate.py"
+        dest: /usr/local/libexec/mx-smtp-correlate.py
+        owner: root
+        group: root
+        mode: '0755'
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+
+    - name: Remove legacy Gatehub collector override
+      ansible.builtin.file:
+        path: /etc/systemd/system/tlsgate-smtp-correlate.service.d/gatehub.conf
+        state: absent
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+      notify:
+        - Reload systemd
+        - Restart SMTP correlation timer
+
+    - name: Install SMTP correlation service
+      ansible.builtin.template:
+        src: tlsgate-smtp-correlate.service.j2
+        dest: /etc/systemd/system/tlsgate-smtp-correlate.service
+        owner: root
+        group: root
+        mode: '0644'
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+      notify:
+        - Reload systemd
+        - Restart SMTP correlation timer
+
+    - name: Install SMTP correlation timer
+      ansible.builtin.template:
+        src: tlsgate-smtp-correlate.timer.j2
+        dest: /etc/systemd/system/tlsgate-smtp-correlate.timer
+        owner: root
+        group: root
+        mode: '0644'
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+      notify:
+        - Reload systemd
+        - Restart SMTP correlation timer
+
+    - name: Install SMTP correlation log rotation
+      ansible.builtin.template:
+        src: tlsgate-smtp-correlation.logrotate.j2
+        dest: /etc/logrotate.d/tlsgate-smtp-correlation
+        owner: root
+        group: root
+        mode: '0644'
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+
+    - name: Install optional Rspamd TLSGate exporter
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../examples/{{ tlsgate_smtp_rspamd_exporter_source | default('rspamd-tlsgate.lua') }}"
+        dest: "{{ tlsgate_smtp_rspamd_exporter_destination | default('/etc/rspamd/tlsgate.lua') }}"
+        owner: "{{ tlsgate_smtp_rspamd_exporter_owner | default('root') }}"
+        group: "{{ tlsgate_smtp_rspamd_exporter_group | default('root') }}"
+        mode: '0644'
+      when:
+        - tlsgate_smtp_collector_enabled | default(false) | bool
+        - tlsgate_smtp_rspamd_exporter_enabled | default(false) | bool
+
+    - name: Apply SMTP collector unit changes
+      ansible.builtin.meta: flush_handlers
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+
+    - name: Enable and start SMTP correlation timer
+      ansible.builtin.systemd:
+        name: tlsgate-smtp-correlate.timer
+        enabled: true
+        state: started
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+
     - name: Check for a local Prometheus configuration
       ansible.builtin.stat:
         path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
@@ -368,3 +450,8 @@
       loop_control:
         label: "{{ item.name }}"
       changed_when: true
+
+    - name: Restart SMTP correlation timer
+      ansible.builtin.systemd:
+        name: tlsgate-smtp-correlate.timer
+        state: restarted

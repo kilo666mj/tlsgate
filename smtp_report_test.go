@@ -40,11 +40,11 @@ func TestSMTPReportBoundedStableReplayAndUpload(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content", Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	})}
 	cfg := controlplane.Config{URL: "https://gatehub.example/base", InstanceID: "mail-tls", Token: "test-token"}
-	report, err := readSMTPReport(path, cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:02:00Z")
+	report, err := readSMTPReport(path, "", cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:02:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := readSMTPReport(path, cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:03:00Z")
+	second, err := readSMTPReport(path, "", cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:03:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +72,61 @@ func TestSMTPReportRejectsInvalidWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := controlplane.Config{URL: "https://gatehub.example", InstanceID: "mail-tls", Token: "token"}
-	_, err := readSMTPReport(path, cfg, "mx", "[::]:25", "2026-09-08T01:00:00Z", "2026-09-08T00:00:00Z", time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := readSMTPReport(path, "", cfg, "mx", "[::]:25", "2026-09-08T01:00:00Z", "2026-09-08T00:00:00Z", time.Now().UTC().Format(time.RFC3339Nano))
 	if err == nil {
 		t.Fatal("reversed coverage accepted")
+	}
+}
+
+func TestSMTPReportIncludesBoundedCampaignEvidence(t *testing.T) {
+	dir := t.TempDir()
+	summaryPath := filepath.Join(dir, "summary.json")
+	if err := os.WriteFile(summaryPath, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	campaignPath := filepath.Join(dir, "campaign.json")
+	campaign := smtpCampaignReport{
+		Schema: smtpCampaignReportSchema, Instance: "mx-public-smtp", Listener: "[::]:25",
+		Signature:   pregreetSupportSignature,
+		Signatures:  []string{pregreetSupportSignature, pregreetEHLOUserSignature},
+		Connections: 300, EvidenceSessions: 300, Matched: 300,
+	}
+	for i := 0; i < 300; i++ {
+		campaign.Records = append(campaign.Records, smtpCampaignRecord{
+			Timestamp: time.Date(2026, 9, 8, 11, 0, i%60, 0, time.UTC),
+			Client:    fmt.Sprintf("192.0.2.1:%d", 10000+i), ConnectionID: fmt.Sprintf("c%d", i),
+			Signature: pregreetEHLOUserSignature, Reason: "matched",
+		})
+	}
+	b, err := json.Marshal(campaign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(campaignPath, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := controlplane.Config{URL: "https://gatehub.example", InstanceID: "mail-tls", Token: "token"}
+	report, err := readSMTPReport(summaryPath, campaignPath, cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:02:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Campaign == nil || len(report.Campaign.Records) != maxSMTPReportItems || report.Truncated.CampaignRecords != 44 {
+		t.Fatalf("campaign bounds = campaign=%+v truncated=%+v", report.Campaign, report.Truncated)
+	}
+	second, err := readSMTPReport(summaryPath, campaignPath, cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:03:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReplayID != second.ReplayID {
+		t.Fatal("campaign replay identity changed with generation time")
+	}
+	campaign.Listener = "[::]:587"
+	b, _ = json.Marshal(campaign)
+	if err := os.WriteFile(campaignPath, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSMTPReport(summaryPath, campaignPath, cfg, "mx-public-smtp", "[::]:25", "2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z", "2026-09-08T00:02:00Z"); err == nil {
+		t.Fatal("mismatched campaign listener accepted")
 	}
 }
 
@@ -108,7 +160,7 @@ func TestSMTPReportWireGolden(t *testing.T) {
 	if err := os.WriteFile(summaryPath, encodedSummary, 0600); err != nil {
 		t.Fatal(err)
 	}
-	report, err := readSMTPReport(summaryPath, controlplane.Config{
+	report, err := readSMTPReport(summaryPath, "", controlplane.Config{
 		URL: "https://gatehub.example", InstanceID: "mail-tls", Token: "token",
 	}, "mx-public-smtp", "[::]:25", "2026-09-07T12:00:00Z", "2026-09-08T11:58:00Z", "2026-09-08T12:00:00Z")
 	if err != nil {

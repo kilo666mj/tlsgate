@@ -194,6 +194,18 @@ Set `tlsgate_configure_local_prometheus: false` if another configuration manager
 owns the Prometheus file. Override `tlsgate_prometheus_config` when it is not at
 the default path. Metrics stay on loopback and require no public firewall rule.
 
+### Managed SMTP correlation collector
+
+Set `tlsgate_smtp_collector_enabled: true` to install the repository's bounded
+collector, hardened oneshot service, timer, and logrotate policy. Configure the
+event, verdict, output, instance, schedule, and optional network-prefix paths
+with the `tlsgate_smtp_collector_*` variables shown in the example group vars.
+`tlsgate_smtp_collector_report_gatehub: true` enables authenticated report-only
+uploads, including bounded campaign classifications; it never enables SMTP
+blocking. An optional reviewed Rspamd exporter can be installed with
+`tlsgate_smtp_rspamd_exporter_enabled`, but the MTA remains responsible for
+loading and reloading that file safely.
+
 ### nginx listener configuration
 
 For nginx, the corresponding listener and real-IP configuration is typically:

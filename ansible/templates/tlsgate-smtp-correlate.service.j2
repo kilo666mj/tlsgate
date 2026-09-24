@@ -1,0 +1,23 @@
+[Unit]
+Description=Build the bounded tlsgate SMTP correlation report
+After=tlsgate.service docker.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/local/libexec/mx-smtp-correlate.py --events={{ tlsgate_smtp_collector_events | default('/var/lib/tlsgate/smtp-events.jsonl') | to_json }} --verdicts={{ tlsgate_smtp_collector_verdicts | default('/var/log/rspamd/tlsgate-verdicts.jsonl') | to_json }} --output={{ tlsgate_smtp_collector_output | default('/var/lib/tlsgate/correlation') | to_json }} --instance={{ tlsgate_smtp_collector_instance | default('mx-public-smtp') | to_json }} --config={{ tlsgate_config | to_json }}{{ (' --network-prefixes=' ~ (tlsgate_smtp_collector_network_prefixes | to_json)) if tlsgate_smtp_collector_network_prefixes | default('') | length > 0 else '' }}{{ ' --report-gatehub' if tlsgate_smtp_collector_report_gatehub | default(false) | bool else '' }}
+TimeoutStartSec=4min
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ tlsgate_smtp_collector_output | default('/var/lib/tlsgate/correlation') }}
+ReadOnlyPaths={{ tlsgate_smtp_collector_events | default('/var/lib/tlsgate/smtp-events.jsonl') }} {{ tlsgate_smtp_collector_verdicts | default('/var/log/rspamd/tlsgate-verdicts.jsonl') }} {{ tlsgate_config }}{{ (' ' ~ tlsgate_smtp_collector_network_prefixes) if tlsgate_smtp_collector_network_prefixes | default('') | length > 0 else '' }}
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes

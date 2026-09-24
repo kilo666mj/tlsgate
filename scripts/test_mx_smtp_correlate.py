@@ -85,6 +85,7 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(reported, {"192.0.2.1:25": False, "[2001:db8::1]:25": True})
             for x in manifest["listeners"]:
                 self.assertTrue((output / x["report"]).exists())
+                self.assertTrue((output / x["campaign_report"]).exists())
 
 
 if __name__ == "__main__":
