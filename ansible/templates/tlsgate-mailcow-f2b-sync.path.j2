@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch TLSGate trusted ranges for Mailcow fail2ban whitelist sync
+
+[Path]
+PathChanged={{ tlsgate_mailcow_f2b_sync_ranges_file }}
+Unit=tlsgate-mailcow-f2b-sync.service
+
+[Install]
+WantedBy=paths.target

@@ -69,6 +69,11 @@ type AppConfig struct {
 	// for visibility.
 	ApproveRanges []string            `json:"approve_ranges"`
 	ControlPlane  controlplane.Config `json:"control_plane"`
+	// TrustedRangesFile, when set, receives the Gatehub-managed trusted
+	// ranges as JSON whenever they change so local tools (for example a
+	// fail2ban whitelist sync) can follow them. Static approve_ranges are
+	// not included.
+	TrustedRangesFile string `json:"trusted_ranges_file"`
 }
 
 // ipAllowlist holds the parsed ApproveRanges CIDRs and answers whether a
@@ -134,6 +139,18 @@ func (a *ipAllowlist) replaceDynamic(cidrs []string) (bool, error) {
 	a.dynamic = prefixes
 	a.dynamicInitialized = true
 	return true, nil
+}
+
+// dynamicRanges returns the current Gatehub-managed ranges in canonical,
+// sorted CIDR form.
+func (a *ipAllowlist) dynamicRanges() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]string, 0, len(a.dynamic))
+	for _, prefix := range a.dynamic {
+		out = append(out, prefix.String())
+	}
+	return out
 }
 
 type AlertRangeConfig struct {

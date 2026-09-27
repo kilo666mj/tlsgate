@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-apply Gatehub trusted ranges to the Mailcow fail2ban whitelist
+
+# Saving fail2ban settings in the Mailcow UI rewrites F2B_WHITELIST; this
+# periodic run restores managed entries within a few minutes.
+[Timer]
+OnBootSec=2min
+OnCalendar={{ tlsgate_mailcow_f2b_sync_calendar | default('*:0/5') }}
+Persistent=false
+Unit=tlsgate-mailcow-f2b-sync.service
+
+[Install]
+WantedBy=timers.target
