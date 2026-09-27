@@ -178,6 +178,7 @@ Configuration fields:
 | `control_plane.ca` | For mTLS | CA bundle used to verify Gatehub. |
 | `control_plane.server_name` | No | TLS name override when URL host and certificate differ. |
 | `control_plane.sync_interval` | No | Go duration such as `30s`; defaults to 30 seconds. |
+| `trusted_ranges_file` | No | Path where TLSGate publishes Gatehub trusted ranges as JSON; see [Publishing trusted ranges](#publishing-trusted-ranges). |
 
 Use `doctor` with the same flags as the service to validate configuration,
 routes, fingerprint method, and PROXY mode without opening the SQLite store,
@@ -220,6 +221,33 @@ Current Gatehub policy responses may also publish expiring `trusted_ranges`.
 TLSGate atomically replaces the dynamic portion of its source allowlist on each
 sync while preserving local `approve_ranges`. If Gatehub omits the field,
 TLSGate preserves its current dynamic set for compatibility with older servers.
+
+### Publishing trusted ranges
+
+Set `trusted_ranges_file` to let other local tools follow Gatehub's trusted
+ranges, for example to keep a fail2ban whitelist in step with a home network
+whose IPv6 prefix changes. TLSGate writes the file when the set first arrives
+and whenever it changes, replacing it atomically with mode 0644:
+
+```json
+{
+  "version": 1,
+  "source": "gatehub",
+  "updated_at": "2026-09-27T17:00:00Z",
+  "ranges": ["192.0.2.10/32", "2001:db8:1860::/64"]
+}
+```
+
+Ranges are canonical and sorted; local `approve_ranges` are not included. An
+empty `ranges` list means Gatehub currently trusts nothing. A missing file
+means TLSGate has not received trusted ranges yet, so consumers must treat it
+as unknown rather than empty. The file keeps the last known set while Gatehub
+is unreachable, matching TLSGate's own behavior. Write failures are logged,
+never affect forwarding, and are retried on the next sync. Put the file in a
+directory the service can write, such as `/var/lib/tlsgate`.
+
+For Mailcow, `scripts/mailcow-f2b-trusted-sync.py` copies the ranges into
+netfilter's whitelist; see [Mailcow fail2ban whitelist](mx-smtp.md#mailcow-fail2ban-whitelist).
 
 ## Trusted source ranges (`approve_ranges`)
 

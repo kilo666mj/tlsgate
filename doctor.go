@@ -123,6 +123,14 @@ func runDoctor(args []string, out io.Writer) error {
 	} else {
 		emit("control plane: disabled\n")
 	}
+	switch {
+	case cfg.TrustedRangesFile == "":
+		emit("trusted ranges file: disabled\n")
+	case !cfg.ControlPlane.Enabled():
+		emit("trusted ranges file: %s (never written; requires the control plane)\n", cfg.TrustedRangesFile)
+	default:
+		emit("trusted ranges file: %s\n", cfg.TrustedRangesFile)
+	}
 	if len(routes) == 0 {
 		emit("routes: none configured; configure routes or pass --route\n")
 	} else {

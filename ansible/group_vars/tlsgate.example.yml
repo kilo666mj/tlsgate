@@ -63,6 +63,15 @@ tlsgate_smtp_collector_event_rotate_group: tlsgate
 tlsgate_smtp_collector_verdict_rotate_user: rspamd
 tlsgate_smtp_collector_verdict_rotate_group: rspamd
 
+# Optional: publish Gatehub trusted ranges to a file and keep Mailcow's fail2ban
+# whitelist in step with them, so a trusted network whose address changes is
+# never banned. Requires control_plane. See docs/mx-smtp.md.
+trusted_ranges_file: ""
+tlsgate_mailcow_f2b_sync_enabled: false
+tlsgate_mailcow_f2b_sync_mailcow_dir: /opt/mailcow-dockerized
+tlsgate_mailcow_f2b_sync_redis_container: mailcowdockerized-redis-mailcow-1
+tlsgate_mailcow_f2b_sync_calendar: "*:0/5"
+
 # Optionally install a reviewed Rspamd exporter. Loading/reloading it remains
 # the MTA deployment's responsibility because that mechanism is site-specific.
 tlsgate_smtp_rspamd_exporter_enabled: false

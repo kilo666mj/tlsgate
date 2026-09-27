@@ -188,6 +188,7 @@ func cmdServe(args []string) {
 	if len(cfg.ApproveRanges) > 0 {
 		log.Printf("approve ranges (fingerprint gate bypassed): %s", strings.Join(cfg.ApproveRanges, ", "))
 	}
+	trustedFile := newTrustedRangesWriter(cfg.TrustedRangesFile)
 	cfg.ControlPlane.ApplyTrustedRanges = func(ranges []string) error {
 		changed, err := allow.replaceDynamic(ranges)
 		if err != nil {
@@ -195,6 +196,11 @@ func cmdServe(args []string) {
 		}
 		if changed {
 			log.Printf("gatehub trusted ranges updated: %d range(s)", len(ranges))
+		}
+		// Publishing the file is best effort: a failure must not reject the
+		// policy update or affect forwarding, and is retried on the next sync.
+		if err := trustedFile.update(allow.dynamicRanges(), changed); err != nil {
+			log.Printf("write trusted ranges file: %v", err)
 		}
 		return nil
 	}

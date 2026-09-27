@@ -117,6 +117,39 @@ The scheduled collector includes the matching bounded campaign report in each
 upload. Gatehub validates and displays its signature counts and evidence, but
 does not create or distribute decisions from them.
 
+## Mailcow fail2ban whitelist
+
+Once Mailcow sees real client addresses, its netfilter bans whole networks
+(IPv6 `/64`, IPv4 `/24` by default) after a few failed logins. A single device
+with a stale password can then lock out every device on a trusted network. A
+static whitelist entry breaks when that network's address or prefix changes.
+
+`scripts/mailcow-f2b-trusted-sync.py` keeps netfilter's whitelist in step with
+Gatehub's trusted ranges, using TLSGate's
+[`trusted_ranges_file`](operations.md#publishing-trusted-ranges):
+
+- It adds each trusted range to the Redis hash `F2B_WHITELIST`, which
+  netfilter re-reads every minute.
+- It removes only entries it added itself, tracked in a state file. Entries
+  entered in the Mailcow UI are never changed.
+- It queues an unban for active bans that overlap a trusted range; a whitelist
+  entry alone only prevents new bans.
+- It refuses ranges broader than IPv4 `/16` or IPv6 `/32` and more than 32
+  entries, and leaves Redis unchanged when the ranges file is missing or
+  invalid.
+- It passes the Redis password from `mailcow.conf` to `redis-cli` through the
+  environment, not the command line.
+
+Saving fail2ban settings in the Mailcow UI rewrites `F2B_WHITELIST`, so run the
+script on a timer as well as when the file changes. The Ansible playbook does
+both when `tlsgate_mailcow_f2b_sync_enabled` is true and `trusted_ranges_file`
+is set; it installs `tlsgate-mailcow-f2b-sync.service` with a `.path` unit and
+a five-minute `.timer`. Preview changes with `--dry-run`.
+
+A whitelisted network is never banned by Mailcow, but TLSGate still applies
+fingerprint policy outside the trusted ranges, and failed logins remain in the
+Dovecot and Postfix logs.
+
 ## Operations and rollback
 
 Check timer, service, and report freshness:

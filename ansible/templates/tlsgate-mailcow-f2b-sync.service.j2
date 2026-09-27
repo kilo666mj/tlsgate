@@ -1,0 +1,22 @@
+[Unit]
+Description=Sync Gatehub trusted ranges into the Mailcow fail2ban whitelist
+Documentation=https://github.com/kilo666mj/tlsgate/blob/main/docs/mx-smtp.md
+After=docker.service tlsgate.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/mailcow-f2b-trusted-sync.py \
+  --ranges-file {{ tlsgate_mailcow_f2b_sync_ranges_file }} \
+  --state {{ tlsgate_mailcow_f2b_sync_state | default('/var/lib/tlsgate/mailcow-f2b-managed.json') }} \
+  --mailcow-dir {{ tlsgate_mailcow_f2b_sync_mailcow_dir | default('/opt/mailcow-dockerized') }} \
+  --redis-container {{ tlsgate_mailcow_f2b_sync_redis_container | default('mailcowdockerized-redis-mailcow-1') }}
+# Root is required for the Docker socket; /usr, /boot and /etc stay read-only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true

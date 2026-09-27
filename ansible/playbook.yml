@@ -311,6 +311,54 @@
         state: started
       when: tlsgate_smtp_collector_enabled | default(false) | bool
 
+    - name: Require a trusted ranges file for the Mailcow fail2ban sync
+      ansible.builtin.assert:
+        that:
+          - trusted_ranges_file | default('') | length > 0
+          - control_plane is defined and control_plane.url | default('') | length > 0
+        fail_msg: >-
+          tlsgate_mailcow_f2b_sync_enabled needs trusted_ranges_file and a
+          control_plane; the file is written from Gatehub trusted ranges.
+      when: tlsgate_mailcow_f2b_sync_enabled | default(false) | bool
+
+    - name: Install Mailcow fail2ban whitelist sync
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/mailcow-f2b-trusted-sync.py"
+        dest: /usr/local/libexec/mailcow-f2b-trusted-sync.py
+        owner: root
+        group: root
+        mode: '0755'
+      when: tlsgate_mailcow_f2b_sync_enabled | default(false) | bool
+      notify: Run Mailcow fail2ban sync
+
+    - name: Install Mailcow fail2ban whitelist sync units
+      ansible.builtin.template:
+        src: "tlsgate-mailcow-f2b-sync.{{ item }}.j2"
+        dest: "/etc/systemd/system/tlsgate-mailcow-f2b-sync.{{ item }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: [service, path, timer]
+      vars:
+        tlsgate_mailcow_f2b_sync_ranges_file: "{{ trusted_ranges_file }}"
+      when: tlsgate_mailcow_f2b_sync_enabled | default(false) | bool
+      notify:
+        - Reload systemd
+        - Restart Mailcow fail2ban sync triggers
+        - Run Mailcow fail2ban sync
+
+    - name: Apply Mailcow fail2ban sync unit changes
+      ansible.builtin.meta: flush_handlers
+      when: tlsgate_mailcow_f2b_sync_enabled | default(false) | bool
+
+    - name: Enable Mailcow fail2ban sync triggers
+      ansible.builtin.systemd:
+        name: "tlsgate-mailcow-f2b-sync.{{ item }}"
+        enabled: true
+        state: started
+      loop: [path, timer]
+      when: tlsgate_mailcow_f2b_sync_enabled | default(false) | bool
+
     - name: Check for a local Prometheus configuration
       ansible.builtin.stat:
         path: "{{ tlsgate_prometheus_config | default('/etc/prometheus/prometheus.yml') }}"
@@ -455,3 +503,15 @@
       ansible.builtin.systemd:
         name: tlsgate-smtp-correlate.timer
         state: restarted
+
+    - name: Restart Mailcow fail2ban sync triggers
+      ansible.builtin.systemd:
+        name: "tlsgate-mailcow-f2b-sync.{{ item }}"
+        state: restarted
+      loop: [path, timer]
+
+    - name: Run Mailcow fail2ban sync
+      ansible.builtin.systemd:
+        name: tlsgate-mailcow-f2b-sync.service
+        state: started
+      when: tlsgate_mailcow_f2b_sync_enabled | default(false) | bool
