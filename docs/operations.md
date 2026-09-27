@@ -193,6 +193,13 @@ tlsgate doctor \
   --proxy-protocol off
 ```
 
+This example prints a warning. `doctor` flags TLS routes on the mail login
+ports 465, 587, 993, and 995 that forward to a loopback or private backend
+without PROXY protocol, because the mail server would then see every client as
+tlsgate or a container gateway. The warning is advisory; see
+[Mail login backends](deployment.md#mail-login-backends-imaps-smtps-submission-pop3s)
+for the fix.
+
 ## Gatehub sync
 
 `tlsgate` can optionally sync observed fingerprints and pull approval decisions

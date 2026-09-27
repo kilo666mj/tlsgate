@@ -102,6 +102,11 @@ correct ownership. For a host bind mount, create the directory and run
 `chown 65532:65532 <directory>`; add `:Z` on SELinux hosts. The capability is
 needed only for listener ports below 1024.
 
+These loopback routes are the simplest form. For a mail server in production,
+point each route at a PROXY-aware listener instead, as described in
+[Mail login backends](#mail-login-backends-imaps-smtps-submission-pop3s);
+otherwise the mail server sees every client as tlsgate.
+
 Each `--route LISTEN=BACKEND` adds a proxied port; repeat it for as many
 services as you need (host or container-network backend addresses):
 
@@ -126,6 +131,43 @@ original, byte-identical TLS stream so the backend can recover the client's
 address. This global default applies to routes without an override and is
 disabled by default. Enable it only for backends that expect PROXY protocol.
 
+### Mail login backends (IMAPS, SMTPS, submission, POP3S)
+
+Use PROXY protocol for every mail route that authenticates users. Without it,
+the mail server attributes every connection to tlsgate's address, or to a
+container network gateway when the backend is a Docker-published port. That
+has two consequences:
+
+- Log-based bans (for example Mailcow's netfilter or fail2ban) cannot see the
+  real client and stop working.
+- Relay rules that trust the local network apply to every client. Mailcow's
+  Postfix includes its Docker network in `mynetworks`, so an unproxied SMTPS
+  route to a published port relays mail without authentication for any client
+  that passes the fingerprint gate.
+
+Route each mail port to a listener that expects PROXY protocol and set
+`proxy_protocol` to `v2` on that route. Mailcow already defines such listeners
+inside its containers: Dovecot `imaps_haproxy` on port 10993 and Postfix
+`smtps-haproxy` on port 10465. Reach them on the containers' network addresses,
+not through the host ports Docker publishes:
+
+```json
+{"listen": "[::]:993", "backend": "<dovecot-container-ip>:10993", "proxy_protocol": "v2"},
+{"listen": "[::]:465", "backend": "<postfix-container-ip>:10465", "proxy_protocol": "v2"}
+```
+
+Dovecot accepts PROXY headers only from `haproxy_trusted_networks`; add
+tlsgate's source address on that network (usually the bridge gateway) in
+Mailcow's `data/conf/dovecot/extra.conf` and restart Dovecot. Postfix's
+PROXY-aware services accept headers from any peer, so keep them reachable only
+from the container network.
+
+After switching, confirm that Dovecot's `rip=` and Postfix's `connect from`
+entries show real client addresses, and that an unauthenticated `RCPT TO` for
+an external domain on port 465 is rejected. `tlsgate doctor` warns about mail
+login routes on ports 465, 587, 993, and 995 that forward to a loopback or
+private backend without PROXY protocol.
+
 ### Different policies per route
 
 Append `protocol=tls|smtp`, `allow-unknown=true|false`, and/or
@@ -141,8 +183,8 @@ filtering alongside HTTPS enrollment:
   "database": "/var/lib/tlsgate/db.sqlite",
   "fingerprint": "ja4",
   "routes": [
-    {"listen": "[::]:993", "backend": "127.0.0.1:10993"},
-    {"listen": "[::]:465", "backend": "127.0.0.1:10465"},
+    {"listen": "[::]:993", "backend": "192.0.2.250:10993", "proxy_protocol": "v2"},
+    {"listen": "[::]:465", "backend": "192.0.2.253:10465", "proxy_protocol": "v2"},
     {"listen": "[::]:443", "backend": "127.0.0.1:1443", "allow_unknown": true, "proxy_protocol": "v2"}
   ]
 }

@@ -50,6 +50,18 @@ root-owned event path, and the MTA's PROXY-aware backend. For example:
 
 See [deployment](deployment.md) for runtime configuration and graceful reloads.
 
+## Mail login routes on the same host
+
+Strict TLS routes for IMAPS and SMTPS on the same host need the same treatment
+as port 25: send PROXY v2 to a PROXY-aware listener, not to a Docker-published
+loopback port. An unproxied login route makes the MTA and IMAP server see every
+client as tlsgate or the container gateway. That blinds IP-based bans, and on
+Mailcow it can make port 465 relay without authentication, because Mailcow's
+`mynetworks` includes its container network. See
+[Mail login backends](deployment.md#mail-login-backends-imaps-smtps-submission-pop3s)
+for the Mailcow listeners and the Dovecot trust setting. `tlsgate doctor` warns
+when a mail login route lacks PROXY protocol.
+
 ## Validation and cutover
 
 Use a separate loopback staging listener with its own database and event file.
