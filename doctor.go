@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
+	"strings"
 )
 
 func cmdDoctor(args []string) {
@@ -148,9 +150,43 @@ func runDoctor(args []string, out io.Writer) error {
 			if route.maxConcurrent > 0 {
 				emit("route capacity: %s max-concurrent=%d\n", route.Listen, route.maxConcurrent)
 			}
+			if protocol == "tls" && !proxy && mailRouteHidesClient(route.Listen, route.Backend) {
+				emit("warning: route %s -> %s forwards mail logins without PROXY protocol; "+
+					"the backend sees tlsgate or a container gateway as every client, which blinds "+
+					"IP-based bans and can match trusted-network relay rules (e.g. Mailcow mynetworks). "+
+					"Point it at a PROXY-aware listener with proxy-protocol=v2\n", route.Listen, route.Backend)
+			}
 		}
 	}
 	return writeErr
+}
+
+// mailClientPorts are TLS listener ports where the backend authenticates users
+// and commonly trusts its local network: SMTPS, submission, IMAPS and POP3S.
+var mailClientPorts = map[string]bool{"465": true, "587": true, "993": true, "995": true}
+
+// mailRouteHidesClient reports whether a route forwards a mail login port to a
+// local or private backend, where the backend would otherwise attribute every
+// connection to tlsgate's own address or a container network gateway.
+func mailRouteHidesClient(listen, backend string) bool {
+	_, listenPort, err := net.SplitHostPort(listen)
+	if err != nil || !mailClientPorts[listenPort] {
+		return false
+	}
+	host, _, err := net.SplitHostPort(backend)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(host) {
+	case "localhost", "host.docker.internal":
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	return addr.IsLoopback() || addr.IsPrivate()
 }
 
 func validateDoctorConfig(cfg AppConfig) error {

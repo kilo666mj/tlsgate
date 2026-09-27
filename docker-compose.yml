@@ -1,11 +1,20 @@
-# Example deployment of tlsgate in front of a mail server (mailcow) listening
-# on internal-only ports 10993 (IMAP) and 10465 (SMTPS).
+# Example deployment of tlsgate in front of a mail server (mailcow).
 #
 #   docker compose up -d
 #
-# host networking is used so the localhost backends below are reachable and
-# tlsgate sees real client source IPs. It is Linux-only; for a bridge network
-# see the commented alternative at the bottom.
+# Routes point at mailcow's in-container PROXY-aware listeners (Dovecot
+# imaps_haproxy on 10993, Postfix smtps-haproxy on 10465) and send PROXY v2, so
+# the mail server sees real client addresses. Do not route to mailcow's
+# published loopback ports without PROXY protocol: every client would appear as
+# the Docker gateway, which mailcow's Postfix trusts in mynetworks.
+# The addresses below are mailcow's defaults (IPV4_NETWORK=172.22.1); check
+# yours with `docker network inspect`. Dovecot must also trust the PROXY
+# sender: add `haproxy_trusted_networks = 172.22.1.1` to
+# data/conf/dovecot/extra.conf. See docs/deployment.md, "Mail login backends".
+#
+# host networking is used so the container network is reachable and tlsgate
+# sees real client source IPs. It is Linux-only; for a bridge network see the
+# commented alternative at the bottom.
 services:
   tlsgate:
     # Pin to a digest in production, e.g. ghcr.io/kilo666mj/tlsgate@sha256:...
@@ -14,8 +23,8 @@ services:
     network_mode: host
     command:
       - serve
-      - --route=[::]:993=127.0.0.1:10993
-      - --route=[::]:465=127.0.0.1:10465
+      - --route=[::]:993=172.22.1.250:10993,proxy-protocol=v2
+      - --route=[::]:465=172.22.1.253:10465,proxy-protocol=v2
       - --fingerprint=ja4
       # First-time setup: uncomment to record (not block) unknown clients while
       # you connect each device, then `tlsgate list` / `approve` and remove it.
@@ -42,7 +51,8 @@ volumes:
 
 # Bridge-network alternative (works on non-Linux, but the backend must be
 # reachable from inside the container and client IPs are NATed to the docker
-# gateway):
+# gateway). tlsgate then fingerprints correctly but cannot pass real client
+# addresses on, so avoid it for mail login routes (see the note at the top):
 #
 # services:
 #   tlsgate:

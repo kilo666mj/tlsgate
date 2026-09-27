@@ -1,10 +1,16 @@
 ---
 # Copy to tlsgate.yml and adjust for your deployment. The real file is ignored.
+# Mail login routes must reach a PROXY-aware listener so the mail server sees
+# real client addresses (see docs/deployment.md, "Mail login backends"). These
+# are Mailcow's in-container haproxy listeners; replace the documentation
+# addresses with the Dovecot and Postfix container IPs.
 routes:
   - listen: "[::]:993"
-    backend: "127.0.0.1:10993"
+    backend: "192.0.2.250:10993"
+    proxy_protocol: v2
   - listen: "[::]:465"
-    backend: "127.0.0.1:10465"
+    backend: "192.0.2.253:10465"
+    proxy_protocol: v2
   # Port 25 observation example:
   # - listen: "[::]:25"
   #   backend: "127.0.0.1:10025"
