@@ -98,7 +98,7 @@ func TestTrustedRangesWriterEmptySetIsExplicit(t *testing.T) {
 }
 
 func TestTrustedRangesWriterDisabled(t *testing.T) {
-	var w *trustedRangesWriter = newTrustedRangesWriter("")
+	w := newTrustedRangesWriter("")
 	if w != nil {
 		t.Fatal("empty path should disable the writer")
 	}
