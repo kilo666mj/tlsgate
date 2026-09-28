@@ -78,6 +78,24 @@ Labels are operator notes, not identities. JA3 and JA4 describe a client
 implementation and algorithm set; multiple devices can share a fingerprint and
 an attacker can copy one.
 
+### Connection log fields
+
+TLS connection logs retain `[client-IP:listener-port]` as their prefix. The
+port in that prefix is the local route, **not** the remote ephemeral port.
+`source_port="54321"` identifies the client's TCP source port, including for
+IPv6 clients. Match the source IP, source port, listener and timestamp against
+backend logs; the backend must receive the real source through PROXY protocol
+for this correlation to work.
+
+Parsed fingerprint decisions (`APPROVED`, `PENDING`, `BLOCKED`, `WHITELIST`)
+consistently include `fp`, sanitized `sni` and `alpn`, `ja3`, `ja4`,
+`source_port` and `trusted`. `trusted=true` means the source matched a local
+or control-plane trusted range for this connection; it does not mean the
+fingerprint identifies an authenticated user. Existing prefix/status consumers
+can continue reading the same prefix and ignore the additional fields.
+Non-fingerprint messages bracket the suffix (`[source_port="54321"]`) so
+legacy parsers that read a block reason up to the next bracket still work.
+
 ## Runtime configuration and blocked range alerts
 
 `serve` reads runtime and alert configuration from
