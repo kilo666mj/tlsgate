@@ -82,7 +82,7 @@ an attacker can copy one.
 
 Do not approve a fingerprint merely because it belongs to your own automation.
 Defaults from Go, Python, and curl/OpenSSL can be shared by unrelated programs,
-including scanners. An approval lets every source presenting that fingerprint
+including scanners. An unscoped approval lets every source presenting that fingerprint
 through the fingerprint gate; it is not proof of a particular device, account,
 or user. Labelling it with a device name does not narrow that approval.
 
