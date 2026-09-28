@@ -107,9 +107,9 @@ func cmdList(args []string) {
 	// from Flush, which is where a truncated pipe surfaces.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	if *verbose {
-		_, _ = fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tSIGALGS\tJA3\tJA4\tIPs")
+		_, _ = fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tSIGALGS\tJA3\tJA4\tIPs\tAPPROVAL RANGES")
 	} else {
-		_, _ = fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tIPs")
+		_, _ = fmt.Fprintln(w, "FINGERPRINT\tSTATUS\tLABEL\tCOUNT\tLAST SEEN\tSNI\tALPN\tTLS\tIPs\tAPPROVAL RANGES")
 	}
 	for _, k := range keys {
 		e := fps[k]
@@ -118,12 +118,16 @@ func cmdList(args []string) {
 		if label == "" {
 			label = "-"
 		}
+		scope := "unrestricted"
+		if e.ApprovalRanges != nil {
+			scope = strings.Join(e.ApprovalRanges.Ranges(), ",")
+		}
 		ips := strings.Join(e.IPs, ",")
 		if ips == "" {
 			ips = "-"
 		}
 		if *verbose {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
 				displayValue(tls.SNI),
@@ -132,16 +136,16 @@ func cmdList(args []string) {
 				displayValue(signatureAlgorithmList(tls.SignatureAlgorithms)),
 				displayValue(tls.JA3),
 				displayValue(tls.JA4),
-				displayValue(ips),
+				displayValue(ips), displayValue(scope),
 			)
 		} else {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				displayValue(k), e.Status, displayValue(label), e.Count,
 				e.LastSeen.Format("2006-01-02 15:04:05"),
 				displayValue(tls.SNI),
 				displayValue(strings.Join(tls.ALPN, ",")),
 				displayValue(tlsVersionList(tls.SupportedVersions)),
-				displayValue(ips),
+				displayValue(ips), displayValue(scope),
 			)
 		}
 	}
@@ -262,6 +266,8 @@ func signatureAlgorithmName(v uint16) string {
 func cmdApprove(args []string) {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
 	dbPath := fs.String("db", defaultDB, "database path")
+	ranges := fs.String("ranges", "", "comma-separated client CIDRs restricting this approval")
+	unrestricted := fs.Bool("unrestricted", false, "explicitly remove an approval CIDR restriction")
 	label := fs.String("label", "", "label for this fingerprint")
 	register := fs.Bool("register", false, "create the fingerprint if it has not been observed yet (requires a full fingerprint)")
 	// ExitOnError: Parse exits on bad input, so this can only return nil.
@@ -273,6 +279,13 @@ func cmdApprove(args []string) {
 	st, err := NewStore(*dbPath)
 	if err != nil {
 		fatalf("open store: %v", err)
+	}
+	if *ranges != "" || *unrestricted {
+		if err := approveWithScope(st, fp, *label, *ranges, *unrestricted, *register); err != nil {
+			fatalf("%v", err)
+		}
+		fmt.Printf("approved %s with explicit client scope\n", fp)
+		return
 	}
 	if *register {
 		if err := registerStatus(st, fp, StatusApproved, *label); err != nil {

@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/containrrr/shoutrrr v0.8.0
-	github.com/kilo666mj/gatekit v0.5.0
+	github.com/kilo666mj/gatekit v0.6.0
 	modernc.org/sqlite v1.59.0
 )
 
