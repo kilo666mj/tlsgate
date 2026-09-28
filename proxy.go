@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,6 +190,7 @@ func cmdServe(args []string) {
 		log.Printf("approve ranges (fingerprint gate bypassed): %s", strings.Join(cfg.ApproveRanges, ", "))
 	}
 	trustedFile := newTrustedRangesWriter(cfg.TrustedRangesFile)
+	cfg.ControlPlane.SupportsApprovalRanges = true
 	cfg.ControlPlane.ApplyTrustedRanges = func(ranges []string) error {
 		changed, err := allow.replaceDynamic(ranges)
 		if err != nil {
@@ -298,7 +300,7 @@ func cmdServe(args []string) {
 			if protocol == "smtp" {
 				handleSMTPConn(conn, route.Backend, route.Port, method, routeLimiter, sendProxyV2, smtpEvents)
 			} else {
-				handleConn(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, routeLimiter, allow, sendProxyV2)
+				handleConnWithScope(conn, route.Backend, route.Port, st, blockUnknown, method, alerter, routeLimiter, allow, sendProxyV2, cfg.ApprovalScopeShadow)
 			}
 		})
 	}
@@ -342,6 +344,10 @@ func cmdServe(args []string) {
 }
 
 func handleConn(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter connectionLimiter, allow *ipAllowlist, sendProxyV2 bool) {
+	handleConnWithScope(client, backend, port, st, blockUnknown, method, alerter, limiter, allow, sendProxyV2, false)
+}
+
+func handleConnWithScope(client net.Conn, backend string, port int, st *store.Store, blockUnknown bool, method FingerprintMethod, alerter *BlockedRangeAlerter, limiter connectionLimiter, allow *ipAllowlist, sendProxyV2, scopeShadow bool) {
 	// A peer that already went away is the normal case, not a fault.
 	defer func() {
 		if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -434,7 +440,20 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 				}
 				logFingerprintDecision(clientIP, port, sourcePort, whitelisted, tag, fp, meta)
 			case StatusApproved:
-				logFingerprintDecision(clientIP, port, sourcePort, whitelisted, "APPROVED", fp, meta)
+				tag := "APPROVED"
+				if whitelisted {
+					tag = "WHITELIST"
+				} else if entry.ApprovalRanges != nil {
+					addr, _ := netip.ParseAddr(clientIP)
+					if !entry.ApprovalRanges.Allows(addr) {
+						if !scopeShadow {
+							logFingerprintDecision(clientIP, port, sourcePort, false, "BLOCKED out_of_scope", fp, meta)
+							return
+						}
+						tag = "APPROVED would_block_out_of_scope shadow=true"
+					}
+				}
+				logFingerprintDecision(clientIP, port, sourcePort, whitelisted, tag, fp, meta)
 			}
 		}
 	} else {

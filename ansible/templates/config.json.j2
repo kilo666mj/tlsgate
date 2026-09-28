@@ -1,4 +1,5 @@
 {
+  "approval_scope_shadow": {{ tlsgate_approval_scope_shadow | default(false) | bool | to_json }},
   "routes": {{ routes | default([{'listen': imap_listen | default('[::]:993'), 'backend': imap_backend}, {'listen': smtp_listen | default('[::]:465'), 'backend': smtp_backend}]) | to_nice_json }},
   "database": {{ database | default('/var/lib/tlsgate/db.sqlite') | to_json }},
   "fingerprint": {{ fingerprint | default('ja3') | to_json }},

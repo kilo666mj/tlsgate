@@ -82,7 +82,7 @@ an attacker can copy one.
 
 Do not approve a fingerprint merely because it belongs to your own automation.
 Defaults from Go, Python, and curl/OpenSSL can be shared by unrelated programs,
-including scanners. An approval lets every source presenting that fingerprint
+including scanners. An unscoped approval lets every source presenting that fingerprint
 through the fingerprint gate; it is not proof of a particular device, account,
 or user. Labelling it with a device name does not narrow that approval.
 
@@ -503,3 +503,40 @@ unambiguous. Shoutrrr's ExplicitTLS mode does not require STARTTLS support and
 therefore cannot provide the required guarantee. A server offering only
 STARTTLS needs an implicit TLS endpoint or a different encrypted notification
 service before this update can load that configuration.
+
+
+## Range-scoped fingerprint approvals
+
+An approved fingerprint can be restricted to client CIDRs with Gatehub's
+Approval CIDRs control or the local CLI:
+
+```sh
+tlsgate approve --ranges 192.0.2.0/24,2001:db8:1234::/64 <fingerprint>
+tlsgate list -v
+tlsgate approve --unrestricted <fingerprint>
+```
+
+`--unrestricted` explicitly removes a restriction; a plain `approve` cannot
+silently broaden an already scoped approval. `--register` also supports ranges
+for a full fingerprint that has not yet connected. Gatehub is authoritative when
+synchronization is configured, so make durable managed changes there.
+
+Outside its scope an approved fingerprint is rejected before any backend dial,
+even on an allow-unknown listener, with `BLOCKED out_of_scope` in the log. The
+stored fingerprint remains approved. Static and Gatehub-managed trusted ranges
+still bypass fingerprint policy and are logged as `WHITELIST`. A fingerprint is
+shared client behavior, not authenticated identity; keep backend authentication.
+
+To evaluate a new scope before enforcement, set `approval_scope_shadow` to true
+in the JSON configuration (Ansible: `tlsgate_approval_scope_shadow`). Out-of-scope
+connections then retain their previous forwarding result and log
+`APPROVED would_block_out_of_scope shadow=true`. The default is false. After
+reviewing intended-client receipt and nonmatching traffic, set it back to false
+and verify both outcomes again. A successful trusted-range connection does not
+test CIDR matching because it bypasses that check.
+
+Upgrade nodes before publishing restricted Gatehub decisions. New nodes advertise
+scope support; older ones are refused restricted policy. Do not roll back to a
+binary that ignores CIDR scopes while any remain approved in its database: first
+block those fingerprints and verify synchronization, or use a scope-aware prior
+binary. Configured CIDRs do not follow a changing home prefix automatically.
