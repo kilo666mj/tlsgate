@@ -78,6 +78,35 @@ Labels are operator notes, not identities. JA3 and JA4 describe a client
 implementation and algorithm set; multiple devices can share a fingerprint and
 an attacker can copy one.
 
+### Avoid approving common TLS library fingerprints
+
+Do not approve a fingerprint merely because it belongs to your own automation.
+Defaults from Go, Python, and curl/OpenSSL can be shared by unrelated programs,
+including scanners. An approval lets every source presenting that fingerprint
+through the fingerprint gate; it is not proof of a particular device, account,
+or user. Labelling it with a device name does not narrow that approval.
+
+For automation on a network you control, prefer narrow
+trusted source ranges (see **Trusted source ranges** below). Gatehub can
+publish dynamic ranges that follow a changing home address or IPv6 prefix;
+TLSGate refreshes them through [control-plane sync](#gatehub-sync).
+These ranges bypass the gate even when the fingerprint is blocked elsewhere
+(`WHITELIST forwarding blocked`), without approving that fingerprint for other
+sources. Keep ranges tight: the bypass trusts all connections from those
+addresses, and backend authentication remains necessary.
+
+Before removing an overly broad approval, verify that the intended client's
+current source is covered by the trusted ranges. Review its observations and
+test a fresh connection so a stale address does not lock out legitimate use.
+Do not automatically approve a second fingerprint when SNI changes: this
+implementation uses `d` in JA4 when SNI is present and `i` when it is absent,
+so the same client can produce different JA4 values.
+
+Trusted ranges are a source-wide bypass, not a restriction on an individual
+fingerprint approval. A policy requiring both a matching fingerprint **and** a
+matching source CIDR needs explicit range-scoped approval support; the current
+`approve_ranges` setting does not provide that intersection.
+
 ## Runtime configuration and blocked range alerts
 
 `serve` reads runtime and alert configuration from
