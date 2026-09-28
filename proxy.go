@@ -349,7 +349,11 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 		}
 	}()
 
-	clientIP, _, _ := net.SplitHostPort(client.RemoteAddr().String())
+	clientIP, sourcePort, _ := net.SplitHostPort(client.RemoteAddr().String())
+	logConn := func(format string, args ...any) {
+		// Bracket the suffix so legacy BLOCKED-reason parsers stop before it.
+		log.Printf(format+" [source_port=%q]", append(args, sourcePort)...)
+	}
 
 	// Whitelisted source IPs bypass the gate: every block decision below
 	// becomes non-blocking and the connection is forwarded. Trust is
@@ -361,12 +365,12 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 	// Drop floods before any read or DB write so a single IP cannot pin
 	// goroutines or grow the fingerprint store with randomized handshakes.
 	if limiter != nil && !limiter.Allow(clientIP) {
-		log.Printf("[%s:%d] RATELIMIT dropping connection", clientIP, port)
+		logConn("[%s:%d] RATELIMIT dropping connection", clientIP, port)
 		return
 	}
 
 	if err := client.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		log.Printf("[%s:%d] set handshake deadline: %v", clientIP, port, err)
+		logConn("[%s:%d] set handshake deadline: %v", clientIP, port, err)
 		return
 	}
 
@@ -384,16 +388,16 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 		parseBuf, raw, rerr := readClientHello(client, header)
 		peeked = raw
 		if rerr != nil {
-			log.Printf("[%s:%d] ClientHello error: %v", clientIP, port, rerr)
+			logConn("[%s:%d] ClientHello error: %v", clientIP, port, rerr)
 			if blockThis {
-				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
+				logConn("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
 				return
 			}
 			// allow-unknown or whitelisted: fall through and forward what we read.
 		} else if fp, meta, perr := extractTLSMetadata(parseBuf, method); perr != nil {
-			log.Printf("[%s:%d] parse error: %v", clientIP, port, perr)
+			logConn("[%s:%d] parse error: %v", clientIP, port, perr)
 			if blockThis {
-				log.Printf("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
+				logConn("[%s:%d] BLOCKED  unparseable ClientHello", clientIP, port)
 				return
 			}
 		} else {
@@ -406,21 +410,21 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 				Meta:        meta.toMeta(),
 			}, blockThis)
 			if err != nil {
-				log.Printf("[%s:%d] store error: %v; failing closed", clientIP, port, err)
+				logConn("[%s:%d] store error: %v; failing closed", clientIP, port, err)
 				return
 			}
 			switch entry.Status {
 			case StatusBlocked:
 				if whitelisted {
-					logFingerprintDecision(clientIP, port, "WHITELIST forwarding blocked", fp, meta)
+					logFingerprintDecision(clientIP, port, sourcePort, whitelisted, "WHITELIST forwarding blocked", fp, meta)
 					break
 				}
-				logFingerprintDecision(clientIP, port, "BLOCKED ", fp, meta)
+				logFingerprintDecision(clientIP, port, sourcePort, whitelisted, "BLOCKED ", fp, meta)
 				alerter.AlertBlocked(st, clientIP, port, fp, meta)
 				return
 			case StatusPending:
 				if blockThis {
-					logFingerprintDecision(clientIP, port, "BLOCKED pending", fp, meta)
+					logFingerprintDecision(clientIP, port, sourcePort, whitelisted, "BLOCKED pending", fp, meta)
 					alerter.AlertBlocked(st, clientIP, port, fp, meta)
 					return
 				}
@@ -428,44 +432,44 @@ func handleConn(client net.Conn, backend string, port int, st *store.Store, bloc
 				if whitelisted {
 					tag = "WHITELIST"
 				}
-				log.Printf("[%s:%d] %s fp=%q sni=%q alpn=%q ja3=%q ja4=%q", clientIP, port, tag, fp, sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4)
+				logFingerprintDecision(clientIP, port, sourcePort, whitelisted, tag, fp, meta)
 			case StatusApproved:
-				log.Printf("[%s:%d] APPROVED fp=%q", clientIP, port, fp)
+				logFingerprintDecision(clientIP, port, sourcePort, whitelisted, "APPROVED", fp, meta)
 			}
 		}
 	} else {
 		peeked = header
 		if blockThis {
-			log.Printf("[%s:%d] BLOCKED  non-TLS connection", clientIP, port)
+			logConn("[%s:%d] BLOCKED  non-TLS connection", clientIP, port)
 			return
 		}
-		log.Printf("[%s:%d] ALLOWED  non-TLS connection", clientIP, port)
+		logConn("[%s:%d] ALLOWED  non-TLS connection", clientIP, port)
 	}
 
 	if err := client.SetReadDeadline(time.Time{}); err != nil {
-		log.Printf("[%s:%d] clear handshake deadline: %v", clientIP, port, err)
+		logConn("[%s:%d] clear handshake deadline: %v", clientIP, port, err)
 		return
 	}
 
 	upstream, err := net.DialTimeout("tcp", backend, 10*time.Second)
 	if err != nil {
 		recordBackendFailure(limiter)
-		log.Printf("[%s:%d] dial backend: %v", clientIP, port, err)
+		logConn("[%s:%d] dial backend: %v", clientIP, port, err)
 		return
 	}
 	defer func() {
 		if err := upstream.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Printf("[%s:%d] close backend: %v", clientIP, port, err)
+			logConn("[%s:%d] close backend: %v", clientIP, port, err)
 		}
 	}()
 	if sendProxyV2 {
 		header, err := proxyV2Header(client.RemoteAddr(), client.LocalAddr())
 		if err != nil {
-			log.Printf("[%s:%d] build PROXY v2 header: %v", clientIP, port, err)
+			logConn("[%s:%d] build PROXY v2 header: %v", clientIP, port, err)
 			return
 		}
 		if _, err := upstream.Write(header); err != nil {
-			log.Printf("[%s:%d] write PROXY v2 header: %v", clientIP, port, err)
+			logConn("[%s:%d] write PROXY v2 header: %v", clientIP, port, err)
 			return
 		}
 	}
@@ -597,9 +601,9 @@ func sanitizeLog(s string) string {
 	}, s)
 }
 
-func logFingerprintDecision(clientIP string, port int, status, fp string, meta TLSMetadata) {
-	log.Printf("[%s:%d] %s fp=%q sni=%q alpn=%q", clientIP, port, status, fp,
-		sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")))
+func logFingerprintDecision(clientIP string, port int, sourcePort string, trusted bool, status, fp string, meta TLSMetadata) {
+	log.Printf("[%s:%d] %s fp=%q sni=%q alpn=%q ja3=%q ja4=%q source_port=%q trusted=%t", clientIP, port, status, fp,
+		sanitizeLog(meta.SNI), sanitizeLog(strings.Join(meta.ALPN, ",")), meta.JA3, meta.JA4, sourcePort, trusted)
 }
 
 // sanitizeAlertField prepares an attacker-controlled value (notably SNI) for

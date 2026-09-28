@@ -56,7 +56,7 @@ func TestLogFingerprintDecisionIncludesSanitizedMetadata(t *testing.T) {
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(old) })
 
-	logFingerprintDecision("192.0.2.1", 443, "BLOCKED ", "ja4-test", TLSMetadata{
+	logFingerprintDecision("192.0.2.1", 443, "54321", false, "BLOCKED ", "ja4-test", TLSMetadata{
 		SNI:  "blocked.example\nFORGED",
 		ALPN: []string{"h2", "http/1.1\tFORGED"},
 	})
@@ -66,6 +66,7 @@ func TestLogFingerprintDecisionIncludesSanitizedMetadata(t *testing.T) {
 		`[192.0.2.1:443] BLOCKED  fp="ja4-test"`,
 		`sni="blocked.exampleFORGED"`,
 		`alpn="h2,http/1.1FORGED"`,
+		`source_port="54321" trusted=false`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %s in %s", want, got)
@@ -492,3 +493,57 @@ func TestProxyBidirectionalDrainsAfterHalfClose(t *testing.T) {
 		t.Fatal("proxy did not finish after both directions closed")
 	}
 }
+
+// Exercise the actual decision path so approved connections cannot silently
+// regress to the former metadata-free log line.
+func TestHandleConnApprovedLogIdentifiesSource(t *testing.T) {
+	for _, address := range []string{"192.0.2.10", "2001:db8::10"} {
+		t.Run(address, func(t *testing.T) {
+			hello := captureClientHello(t)
+			fp, meta, err := extractTLSMetadata(hello, MethodJA3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := newTestStore(t)
+			defer func() { _ = st.Close() }()
+			if _, err := st.Observe(store.Observation{Fingerprint: fp, IP: address, Port: 993, Meta: meta.toMeta()}, false); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.SetStatus(fp, StatusApproved); err != nil {
+				t.Fatal(err)
+			}
+			client, peer := net.Pipe()
+			defer func() { _ = peer.Close() }()
+			var output bytes.Buffer
+			old := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(old)
+			done := make(chan struct{})
+			go func() {
+				// An invalid backend ends the handler after the decision log.
+				handleConn(sourceAddressConn{client, &net.TCPAddr{IP: net.ParseIP(address), Port: 54321}}, "invalid", 993, st, true, MethodJA3, nil, nil, &ipAllowlist{}, false)
+				close(done)
+			}()
+			if _, err := peer.Write(hello); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler did not return")
+			}
+			for _, want := range []string{"[" + address + ":993] APPROVED", `sni="mail.example.com"`, `alpn="imap"`, `source_port="54321" trusted=false`} {
+				if !strings.Contains(output.String(), want) {
+					t.Errorf("missing %q in %s", want, output.String())
+				}
+			}
+		})
+	}
+}
+
+type sourceAddressConn struct {
+	net.Conn
+	source net.Addr
+}
+
+func (c sourceAddressConn) RemoteAddr() net.Addr { return c.source }
