@@ -19,7 +19,7 @@
       become: false
       run_once: true
       ansible.builtin.file:
-        path: "{{ playbook_dir }}/secrets"
+        path: "{{ inventory_dir }}/secrets"
         state: directory
         mode: "0700"
 
@@ -183,7 +183,9 @@
         src: /tmp/tlsgate
         dest: /usr/local/bin/tlsgate
         mode: '0755'
-      notify: Restart tlsgate
+      notify:
+        - Restart tlsgate
+        - Restart additional tlsgate instances
 
     - name: Deploy systemd service
       template:
