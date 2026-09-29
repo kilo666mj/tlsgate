@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/store"
 )
 
 func TestFindFingerprintAllowsUniquePrefix(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/store"
 
 	// Seeding a legacy schema opens SQLite directly rather than through
 	// gatekit, so register the driver here instead of relying on gatekit's

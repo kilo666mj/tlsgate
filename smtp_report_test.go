@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kilo666mj/gatekit/controlplane"
+	"go.michaelspost.com/gatekit/controlplane"
 )
 
 func TestSMTPReportBoundedStableReplayAndUpload(t *testing.T) {

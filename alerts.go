@@ -14,8 +14,8 @@ import (
 
 	"github.com/containrrr/shoutrrr"
 	"github.com/containrrr/shoutrrr/pkg/types"
-	"github.com/kilo666mj/gatekit/controlplane"
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/controlplane"
+	"go.michaelspost.com/gatekit/store"
 )
 
 const (

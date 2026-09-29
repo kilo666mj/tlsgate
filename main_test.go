@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/store"
 )
 
 // muteStdout silences the fmt.Printf confirmations the CLI commands emit so

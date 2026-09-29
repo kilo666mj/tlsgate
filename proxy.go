@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kilo666mj/gatekit/controlplane"
-	"github.com/kilo666mj/gatekit/lifecycle"
-	gateproxy "github.com/kilo666mj/gatekit/proxy"
-	"github.com/kilo666mj/gatekit/ratelimit"
-	"github.com/kilo666mj/gatekit/sdnotify"
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/controlplane"
+	"go.michaelspost.com/gatekit/lifecycle"
+	gateproxy "go.michaelspost.com/gatekit/proxy"
+	"go.michaelspost.com/gatekit/ratelimit"
+	"go.michaelspost.com/gatekit/sdnotify"
+	"go.michaelspost.com/gatekit/store"
 )
 
 const recordTypeHandshake = 0x16
