@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
-	"github.com/kilo666mj/gatekit/approval"
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/approval"
+	"go.michaelspost.com/gatekit/store"
 	"log"
 	"net"
 	"strings"

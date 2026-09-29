@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kilo666mj/gatekit/controlplane"
+	"go.michaelspost.com/gatekit/controlplane"
 )
 
 const (

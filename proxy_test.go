@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kilo666mj/gatekit/ratelimit"
-	"github.com/kilo666mj/gatekit/store"
+	"go.michaelspost.com/gatekit/ratelimit"
+	"go.michaelspost.com/gatekit/store"
 )
 
 // truncatedClientHello is a complete TLS handshake record (type 0x16)

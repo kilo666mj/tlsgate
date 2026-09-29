@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	gateproxy "github.com/kilo666mj/gatekit/proxy"
+	gateproxy "go.michaelspost.com/gatekit/proxy"
 )
 
 // routeConfig adds optional per-listener overrides to the shared TCP route.
