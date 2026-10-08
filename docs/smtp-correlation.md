@@ -152,6 +152,18 @@ to one second. Ambiguous connections, missing session boundaries, multiple
 distinct verdicts for a reused queue ID, and messages too close to STARTTLS
 remain unmatched.
 
+Postfix logs `TLS connection established from host[address]:port` for each
+completed STARTTLS handshake when `smtpd_tls_loglevel` is 1 or higher. The
+collector uses the position of that line in the same smtpd session to place
+each queued message before or after the upgrade. Line order within one smtpd
+process does not depend on comparing clocks with tlsgate's event file, so a
+message that a fast sender queues within a second of its ClientHello is still
+attributed. A message queued before that line is plaintext even if it was
+logged late. The collector reports transport as unknown, never as TLS, if
+Postfix records two handshakes in one session, or if Postfix and tlsgate
+disagree about whether the connection upgraded. Without the Postfix line, the
+timestamp rule above still applies.
+
 For a shorter local retention period, stop concurrent collector runs and prune
 by message time, then reclaim space if required:
 
@@ -192,8 +204,8 @@ rejected; do not feed a file while another process is appending it.
 `TLSMessages`, `PlaintextMessages`, and `UnknownTransportMessages` count
 message transports separately from connection totals. `STARTTLS` counts
 accepted upgrades, not confirmed TLS handshakes. Only an observed ClientHello
-after an accepted upgrade can supply a fingerprint, and timestamp overlap is
-reported as unknown. Malformed records have separate counters; entire sessions
+after an accepted upgrade can supply a fingerprint. Timestamp overlap without
+Postfix TLS ordering evidence is reported as unknown. Malformed records have separate counters; entire sessions
 whose telemetry was lost cannot be counted. Historical logs from before this
 feature was enabled cannot be retroactively fingerprinted.
 

@@ -39,7 +39,21 @@ type smtpMessage struct {
 	Instance, QueueID, Client, PID string
 	At, SessionStart               time.Time
 	HasSession                     bool
+	PostfixTLS                     postfixTLSOrder
 }
+
+// postfixTLSOrder places a message relative to Postfix's own TLS handshake
+// record in the same smtpd session. Line order within one smtpd process does
+// not depend on comparing clocks with tlsgate's event file.
+type postfixTLSOrder int
+
+const (
+	postfixTLSUnknown postfixTLSOrder = iota
+	postfixTLSBeforeMessage
+	postfixTLSAfterMessage
+	postfixTLSConflict
+)
+
 type smtpCorrelation struct {
 	QueueID        string   `json:"queue_id"`
 	Classification string   `json:"classification"`
@@ -238,7 +252,7 @@ func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, 
 			c := candidates[0]
 			r.ConnectionID = c.ID
 			r.Listener = c.Listener
-			r.Transport = messageSMTPTransport(c, m.At, tolerance)
+			r.Transport = messageSMTPTransport(c, m, tolerance)
 			if r.Transport != "starttls" {
 				r.Reason = "message_before_observed_starttls"
 				if r.Transport == "unknown" {
@@ -345,8 +359,25 @@ func smtpMessageIdentity(m smtpMessage) string {
 	return fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s", m.Instance, m.QueueID, m.Client, m.PID, m.SessionStart.UTC().Format(time.RFC3339Nano), m.At.UTC().Format(time.RFC3339Nano))
 }
 
-func messageSMTPTransport(c smtpConnRecord, at time.Time, tolerance time.Duration) string {
+func messageSMTPTransport(c smtpConnRecord, m smtpMessage, tolerance time.Duration) string {
 	if !c.completeObservation() {
+		return "unknown"
+	}
+	at := m.At
+	switch m.PostfixTLS {
+	case postfixTLSConflict:
+		return "unknown"
+	case postfixTLSBeforeMessage:
+		// A session upgrades at most once, so Postfix's handshake and the
+		// observed ClientHello are the same one. Disagreement stays unknown.
+		if c.State == "fingerprinted" && !at.Before(c.Accepted.Add(-tolerance)) {
+			return "starttls"
+		}
+		return "unknown"
+	case postfixTLSAfterMessage:
+		if c.State == "fingerprinted" || c.State == "starttls_accepted_no_fingerprint" {
+			return "plaintext"
+		}
 		return "unknown"
 	}
 	if c.State == "no_observed_upgrade" || c.State == "starttls_refused" {
@@ -443,6 +474,7 @@ var postfixEnvelope = regexp.MustCompile(`^(\S+)\s+\S+\s+(?:[A-Za-z0-9_.-]+\[[0-
 var postfixConnect = regexp.MustCompile(`^connect from .+\[([^]]+)\](?::([0-9]+))?$`)
 var postfixQueue = regexp.MustCompile(`^([A-Za-z0-9]+): client=.+\[([^]]+)\](?::([0-9]+))?`)
 var postfixDisconnect = regexp.MustCompile(`^disconnect from `)
+var postfixTLSEstablished = regexp.MustCompile(`^(?:Anonymous|Untrusted|Trusted|Verified) TLS connection established from [^\s\[]+\[([^]]+)\](?::([0-9]+))?(?:: | to )`)
 
 func readPostfixMessages(path, instance string) ([]smtpMessage, error) {
 	sc, e := newSMTPBatchScanner(path)
@@ -450,10 +482,12 @@ func readPostfixMessages(path, instance string) ([]smtpMessage, error) {
 		return nil, e
 	}
 	type sess struct {
-		client string
-		epoch  time.Time
+		client   string
+		epoch    time.Time
+		tls      postfixTLSOrder
+		messages []int
 	}
-	sessions := map[string]sess{}
+	sessions := map[string]*sess{}
 	var out []smtpMessage
 	for sc.Scan() {
 		m := postfixEnvelope.FindStringSubmatch(sc.Text())
@@ -470,7 +504,24 @@ func readPostfixMessages(path, instance string) ([]smtpMessage, error) {
 				delete(sessions, pid)
 				continue
 			}
-			sessions[pid] = sess{net.JoinHostPort(x[1], x[2]), at}
+			sessions[pid] = &sess{client: net.JoinHostPort(x[1], x[2]), epoch: at}
+			continue
+		}
+		if x := postfixTLSEstablished.FindStringSubmatch(body); x != nil {
+			s, ok := sessions[pid]
+			if !ok || x[2] == "" || s.client != net.JoinHostPort(x[1], x[2]) || at.Before(s.epoch) {
+				continue
+			}
+			order := postfixTLSAfterMessage
+			if s.tls != postfixTLSUnknown {
+				// STARTTLS cannot succeed twice in one session.
+				s.tls, order = postfixTLSConflict, postfixTLSConflict
+			} else {
+				s.tls = postfixTLSBeforeMessage
+			}
+			for _, i := range s.messages {
+				out[i].PostfixTLS = order
+			}
 			continue
 		}
 		if postfixDisconnect.MatchString(body) {
@@ -488,7 +539,8 @@ func readPostfixMessages(path, instance string) ([]smtpMessage, error) {
 				out = append(out, smtpMessage{Instance: instance, QueueID: x[1], Client: client, PID: pid, At: at})
 				continue
 			}
-			out = append(out, smtpMessage{Instance: instance, QueueID: x[1], Client: client, PID: pid, At: at, SessionStart: s.epoch, HasSession: true})
+			s.messages = append(s.messages, len(out))
+			out = append(out, smtpMessage{Instance: instance, QueueID: x[1], Client: client, PID: pid, At: at, SessionStart: s.epoch, HasSession: true, PostfixTLS: s.tls})
 		}
 	}
 	return out, sc.Err()
