@@ -295,12 +295,22 @@ func TestSMTPReviewTransportAndMissingTelemetry(t *testing.T) {
 	}{
 		{5 * time.Second, "plaintext"}, {10 * time.Second, "unknown"}, {20 * time.Second, "starttls"},
 	} {
-		if got := messageSMTPTransport(c, at.Add(test.offset), time.Second); got != test.want {
+		if got := messageSMTPTransport(c, smtpMessage{At: at.Add(test.offset)}, time.Second); got != test.want {
 			t.Fatalf("offset %v: got %s want %s", test.offset, got, test.want)
 		}
 	}
+	for _, test := range []struct {
+		offset time.Duration
+		want   string
+	}{
+		{5 * time.Second, "unknown"}, {10 * time.Second, "starttls"}, {11 * time.Second, "starttls"},
+	} {
+		if got := messageSMTPTransport(c, smtpMessage{At: at.Add(test.offset), PostfixTLS: postfixTLSBeforeMessage}, time.Second); got != test.want {
+			t.Fatalf("Postfix TLS offset %v: got %s want %s", test.offset, got, test.want)
+		}
+	}
 	c.Accepted = time.Time{}
-	if c.completeObservation() || messageSMTPTransport(c, at.Add(20*time.Second), time.Second) != "unknown" {
+	if c.completeObservation() || messageSMTPTransport(c, smtpMessage{At: at.Add(20 * time.Second), PostfixTLS: postfixTLSBeforeMessage}, time.Second) != "unknown" {
 		t.Fatal("lost STARTTLS event was treated as a complete observation")
 	}
 }
