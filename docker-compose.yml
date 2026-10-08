@@ -18,7 +18,7 @@
 services:
   tlsgate:
     # Pin to a digest in production, e.g. ghcr.io/kilo666mj/tlsgate@sha256:...
-    image: ghcr.io/kilo666mj/tlsgate:latest@sha256:fa552d0eb3edb54c55f36945240f7e3e808f4855ca3dc36f177a9241fc6e2632
+    image: ghcr.io/kilo666mj/tlsgate:latest@sha256:a27340aab502320fcf26de4644315e7b98c0ec03242e3cd741b3c5f5f439d8fd
     restart: unless-stopped
     network_mode: host
     command:
