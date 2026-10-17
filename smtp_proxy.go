@@ -489,9 +489,11 @@ func proxySMTPBidirectional(client, upstream net.Conn, o *smtpObserver) {
 	done := make(chan error, 2)
 	go func() { done <- pump(upstream, client, o.client) }()
 	go func() { done <- pump(client, upstream, o.server) }()
-	if <-done != nil {
-		_ = client.Close()
-		_ = upstream.Close()
+	// Close both sides on the first error so the other pump unblocks.
+	for range 2 {
+		if err := <-done; err != nil {
+			_ = client.Close()
+			_ = upstream.Close()
+		}
 	}
-	<-done
 }
