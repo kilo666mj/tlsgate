@@ -84,6 +84,7 @@ func cmdClassifySMTP(args []string) {
 	maxLifetime := fs.Duration("max-lifetime", 10*time.Minute, "maximum attributable connection lifetime")
 	tolerance := fs.Duration("tolerance", time.Second, "timestamp precision tolerance")
 	format := fs.String("format", "text", "text or json report")
+	excludeSources := fs.String("exclude-sources", "", "comma-separated IPs or CIDR prefixes of your own monitoring probes to leave out of the report")
 	_ = fs.Parse(args)
 	if fs.NArg() != 0 || *events == "" || *postfix == "" || *instance == "" || *listener == "" {
 		fatalf("classify-smtp requires --events, --postfix-log, --instance, and --listener")
@@ -91,9 +92,17 @@ func cmdClassifySMTP(args []string) {
 	if *format != "text" && *format != "json" {
 		fatalf("invalid --format %q", *format)
 	}
-	report, err := runSMTPCampaignClassification(*events, *postfix, *prefixes, *instance, *listener, *maxLifetime, *tolerance)
+	exclude, err := parseSMTPSourceExclusion(*excludeSources)
+	if err != nil {
+		fatalf("classify-smtp: %v", err)
+	}
+	report, excluded, err := runSMTPCampaignClassificationExcluding(*events, *postfix, *prefixes, *instance, *listener, *maxLifetime, *tolerance, exclude)
 	if err != nil {
 		fatalf("classify SMTP: %v", err)
+	}
+	if !exclude.empty() {
+		// stderr keeps the JSON report, and Gatehub's strict schema, unchanged.
+		fmt.Fprintf(os.Stderr, "classify-smtp listener=%s excluded_connections=%d excluded_evidence_sessions=%d\n", *listener, excluded.Connections, excluded.EvidenceSessions)
 	}
 	if *format == "json" {
 		if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
@@ -111,23 +120,38 @@ func cmdClassifySMTP(args []string) {
 	}
 }
 
+// smtpCampaignExclusionCounts reports how much monitoring traffic a run left out.
+type smtpCampaignExclusionCounts struct {
+	Connections      int
+	EvidenceSessions int
+}
+
 func runSMTPCampaignClassification(eventsPath, postfixPath, prefixPath, instance, listener string, maxLifetime, tolerance time.Duration) (smtpCampaignReport, error) {
+	report, _, err := runSMTPCampaignClassificationExcluding(eventsPath, postfixPath, prefixPath, instance, listener, maxLifetime, tolerance, smtpSourceExclusion{})
+	return report, err
+}
+
+// runSMTPCampaignClassificationExcluding leaves connections and Postscreen
+// sessions from excluded sources out of every count and record, so the
+// report stays internally consistent.
+func runSMTPCampaignClassificationExcluding(eventsPath, postfixPath, prefixPath, instance, listener string, maxLifetime, tolerance time.Duration, exclude smtpSourceExclusion) (smtpCampaignReport, smtpCampaignExclusionCounts, error) {
+	var excluded smtpCampaignExclusionCounts
 	if strings.TrimSpace(instance) == "" {
-		return smtpCampaignReport{}, fmt.Errorf("instance is required")
+		return smtpCampaignReport{}, excluded, fmt.Errorf("instance is required")
 	}
 	if _, _, err := net.SplitHostPort(listener); err != nil {
-		return smtpCampaignReport{}, fmt.Errorf("listener must be an exact IP:port endpoint: %w", err)
+		return smtpCampaignReport{}, excluded, fmt.Errorf("listener must be an exact IP:port endpoint: %w", err)
 	}
 	if maxLifetime <= 0 || maxLifetime > time.Hour {
-		return smtpCampaignReport{}, fmt.Errorf("max lifetime must be between zero and one hour")
+		return smtpCampaignReport{}, excluded, fmt.Errorf("max lifetime must be between zero and one hour")
 	}
 	if tolerance < 0 || tolerance > time.Minute {
-		return smtpCampaignReport{}, fmt.Errorf("tolerance must be between zero and one minute")
+		return smtpCampaignReport{}, excluded, fmt.Errorf("tolerance must be between zero and one minute")
 	}
 
 	connections, malformedEvents, err := readSMTPConnectionsStats(eventsPath)
 	if err != nil {
-		return smtpCampaignReport{}, err
+		return smtpCampaignReport{}, excluded, err
 	}
 	filtered := connections[:0]
 	for _, connection := range connections {
@@ -145,6 +169,10 @@ func runSMTPCampaignClassification(eventsPath, postfixPath, prefixPath, instance
 			continue
 		}
 		connection.Client = client
+		if exclude.excludesClient(client) {
+			excluded.Connections++
+			continue
+		}
 		if connection.Behavior != nil && !validSMTPBehavior(connection.Behavior) {
 			malformedEvents++
 			connection.Behavior = nil
@@ -154,11 +182,20 @@ func runSMTPCampaignClassification(eventsPath, postfixPath, prefixPath, instance
 	connections = filtered
 	evidence, malformedLogs, err := readSMTPCampaignEvidence(postfixPath, maxLifetime)
 	if err != nil {
-		return smtpCampaignReport{}, err
+		return smtpCampaignReport{}, excluded, err
 	}
+	keptEvidence := evidence[:0]
+	for _, item := range evidence {
+		if exclude.excludesClient(item.Client) {
+			excluded.EvidenceSessions++
+			continue
+		}
+		keptEvidence = append(keptEvidence, item)
+	}
+	evidence = keptEvidence
 	prefixMap, err := readSMTPNetworkPrefixes(prefixPath)
 	if err != nil {
-		return smtpCampaignReport{}, err
+		return smtpCampaignReport{}, excluded, err
 	}
 
 	report := smtpCampaignReport{
@@ -215,7 +252,7 @@ func runSMTPCampaignClassification(eventsPath, postfixPath, prefixPath, instance
 		}
 		return report.Records[i].Timestamp.Before(report.Records[j].Timestamp)
 	})
-	return report, nil
+	return report, excluded, nil
 }
 
 func matchingSMTPConnections(candidates []smtpConnRecord, evidence smtpCampaignEvidence, maxLifetime, tolerance time.Duration) []smtpConnRecord {

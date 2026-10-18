@@ -144,7 +144,10 @@ def main():
     p.add_argument("--config", default="/etc/tlsgate/config.json")
     p.add_argument("--network-prefixes", default="",
                    help="optional offline network-prefix JSON for campaign context")
+    p.add_argument("--exclude-sources", default="",
+                   help="comma-separated IPs or CIDR prefixes of your own monitoring probes")
     args = p.parse_args()
+    exclusion = ["--exclude-sources", args.exclude_sources] if args.exclude_sources else []
     output = Path(args.output)
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(output, 0o700)
@@ -178,7 +181,7 @@ def main():
                     args.tlsgate, "correlate-smtp", "--events", str(work / "events.jsonl"),
                     "--postfix-log", str(work / "postfix.log"), "--verdicts", str(work / "verdicts.jsonl"),
                     "--instance", args.instance, "--listener", listener,
-                    "--db", str(output / "db.sqlite"), "--format", "json"],
+                    "--db", str(output / "db.sqlite"), "--format", "json"] + exclusion,
                     check=True, stdout=out)
             os.chmod(report, 0o600)
             destination = output / report.name
@@ -186,7 +189,7 @@ def main():
             campaign_command = [
                 args.tlsgate, "classify-smtp", "--events", str(work / "events.jsonl"),
                 "--postfix-log", str(work / "postfix.log"), "--instance", args.instance,
-                "--listener", listener, "--format", "json"]
+                "--listener", listener, "--format", "json"] + exclusion
             if args.network_prefixes:
                 campaign_command.extend(["--network-prefixes", args.network_prefixes])
             with campaign_report.open("wb") as out:

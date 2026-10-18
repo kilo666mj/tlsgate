@@ -244,7 +244,11 @@ event, verdict, output, instance, schedule, and optional network-prefix paths
 with the `tlsgate_smtp_collector_*` variables shown in the example group vars.
 `tlsgate_smtp_collector_report_gatehub: true` enables authenticated report-only
 uploads, including bounded campaign classifications; it never enables SMTP
-blocking. An optional reviewed Rspamd exporter can be installed with
+blocking. List the addresses of your own SMTP uptime monitors in
+`tlsgate_smtp_collector_exclude_sources` (one IP address or CIDR prefix per
+item) so their sessions are left out of the reports; see
+[Excluding your own monitoring probes](smtp-correlation.md#excluding-your-own-monitoring-probes).
+An optional reviewed Rspamd exporter can be installed with
 `tlsgate_smtp_rspamd_exporter_enabled`, but the MTA remains responsible for
 loading and reloading that file safely.
 

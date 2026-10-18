@@ -276,6 +276,28 @@ payloads as untrusted evidence: malformed targeted records are counted, raw
 payload text is never copied to reports, and only bounded parsed fields inform
 the signature.
 
+### Excluding your own monitoring probes
+
+An uptime monitor that opens an SMTP session every minute produces about 1,440
+connections and Postscreen sessions a day. In a rolling 24-hour report those
+sessions can outnumber real traffic many times over, and campaign records
+beyond the 256-record upload cap are truncated. Pass the monitor's addresses to
+both commands to leave them out:
+
+```sh
+tlsgate correlate-smtp ... --exclude-sources '192.0.2.10,2001:db8:10::/64'
+tlsgate classify-smtp ... --exclude-sources '192.0.2.10,2001:db8:10::/64'
+```
+
+The value is a comma-separated list of at most 256 IP addresses or CIDR
+prefixes; a bare address matches only that host. Connections, Postfix messages
+and Postscreen sessions from those sources are dropped before counting, so
+every count and record in the report, and the upload to Gatehub, covers only
+the remaining traffic. The report format does not change. When exclusion is
+configured, each command writes one line to standard error with the number of
+connections and messages or evidence sessions it left out. Exclude only hosts
+you operate: an excluded source is invisible in these reports, not trusted.
+
 Unsupported queue reinjection, absent queue IDs, and rejected sessions with no
 queue assignment cannot produce a fingerprint-to-message verdict. This is a
 batch collector, not a log-tailing daemon. No automatic block rules are created.

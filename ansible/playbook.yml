@@ -231,6 +231,17 @@
       loop_control:
         label: "{{ item.name }}"
 
+    - name: Require a list of excluded SMTP monitoring sources
+      ansible.builtin.assert:
+        that:
+          - tlsgate_smtp_collector_exclude_sources | default([]) is sequence
+          - tlsgate_smtp_collector_exclude_sources | default([]) is not string
+          - tlsgate_smtp_collector_exclude_sources | default([]) | select('search', '[,\s]') | list | length == 0
+        fail_msg: >-
+          tlsgate_smtp_collector_exclude_sources must be a YAML list with one
+          IP address or CIDR prefix per item.
+      when: tlsgate_smtp_collector_enabled | default(false) | bool
+
     - name: Create SMTP correlation output directory
       ansible.builtin.file:
         path: "{{ tlsgate_smtp_collector_output | default('/var/lib/tlsgate/correlation') }}"
