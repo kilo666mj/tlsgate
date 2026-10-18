@@ -87,6 +87,36 @@ class CollectorTests(unittest.TestCase):
                 self.assertTrue((output / x["report"]).exists())
                 self.assertTrue((output / x["campaign_report"]).exists())
 
+    def test_exclude_sources_reach_both_report_commands(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            at = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat()
+            events = d / "events.jsonl"
+            events.write_text("".join(
+                json.dumps({"version": 1, "type": kind, "timestamp": at, "instance": "mx-public-smtp",
+                            "connection_id": "c", "listener": "192.0.2.1:25"}) + "\n"
+                for kind in ("start", "end")))
+            bin_dir = d / "bin"
+            bin_dir.mkdir()
+            calls = d / "calls"
+            (bin_dir / "journalctl").write_text("#!/bin/sh\nexit 0\n")
+            (bin_dir / "tlsgate").write_text(
+                "#!/bin/sh\n"
+                f"echo \"$*\" >> {calls}\n"
+                "echo '{}'\n")
+            for name in ("journalctl", "tlsgate"):
+                os.chmod(bin_dir / name, 0o755)
+            argv = ["collector", "--events", str(events), "--verdicts", str(d / "verdicts.jsonl"),
+                    "--output", str(d / "out"), "--tlsgate", str(bin_dir / "tlsgate"),
+                    "--exclude-sources", "192.0.2.7,2001:db8::/64"]
+            env = {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            with mock.patch.object(sys, "argv", argv), mock.patch.dict(os.environ, env):
+                collector.main()
+            lines = calls.read_text().splitlines()
+            self.assertEqual([x.split()[0] for x in lines], ["correlate-smtp", "classify-smtp"])
+            for line in lines:
+                self.assertIn("--exclude-sources 192.0.2.7,2001:db8::/64", line)
+
 
 if __name__ == "__main__":
     unittest.main()

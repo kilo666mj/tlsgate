@@ -62,6 +62,12 @@ tlsgate_smtp_collector_output: /var/lib/tlsgate/correlation
 tlsgate_smtp_collector_instance: mx-public-smtp
 tlsgate_smtp_collector_report_gatehub: false
 tlsgate_smtp_collector_network_prefixes: ""
+# Addresses or CIDR prefixes of your own SMTP monitoring probes. Their
+# connections and Postscreen sessions are left out of the reports so that a
+# once-a-minute health check cannot crowd out real evidence.
+tlsgate_smtp_collector_exclude_sources: []
+#   - 192.0.2.10
+#   - 2001:db8:10::/64
 tlsgate_smtp_collector_calendar: "*:0/5"
 tlsgate_smtp_collector_randomized_delay: 15s
 tlsgate_smtp_collector_event_rotate_user: tlsgate

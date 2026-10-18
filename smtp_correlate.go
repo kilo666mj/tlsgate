@@ -82,6 +82,7 @@ func cmdCorrelateSMTP(args []string) {
 	listener := fs.String("listener", "", "exact tlsgate listener endpoint namespace")
 	tolerance := fs.Duration("tolerance", time.Second, "timestamp precision tolerance")
 	format := fs.String("format", "text", "text or json summary")
+	excludeSources := fs.String("exclude-sources", "", "comma-separated IPs or CIDR prefixes of your own monitoring probes to leave out of the report")
 	_ = fs.Parse(args)
 	if fs.NArg() != 0 {
 		fatalf("correlate-smtp takes flags only")
@@ -92,9 +93,17 @@ func cmdCorrelateSMTP(args []string) {
 	if *format != "text" && *format != "json" {
 		fatalf("invalid --format %q", *format)
 	}
-	result, err := runSMTPCorrelation(*events, *postfix, *verdicts, *dbPath, *instance, *listener, *tolerance)
+	exclude, err := parseSMTPSourceExclusion(*excludeSources)
+	if err != nil {
+		fatalf("correlate-smtp: %v", err)
+	}
+	result, excluded, err := runSMTPCorrelationExcluding(*events, *postfix, *verdicts, *dbPath, *instance, *listener, *tolerance, exclude)
 	if err != nil {
 		fatalf("correlate SMTP: %v", err)
+	}
+	if !exclude.empty() {
+		// stderr keeps the JSON report, and Gatehub's strict schema, unchanged.
+		fmt.Fprintf(os.Stderr, "correlate-smtp listener=%s excluded_connections=%d excluded_messages=%d\n", *listener, excluded.Connections, excluded.Messages)
 	}
 	if *format == "json" {
 		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
@@ -145,25 +154,43 @@ type fingerprintAggregate struct {
 	Unknown int    `json:"unknown"`
 }
 
-func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, listener string, tolerance time.Duration) (result smtpSummary, err error) {
+// smtpExclusionCounts reports how much monitoring traffic a run left out.
+type smtpExclusionCounts struct {
+	Connections int
+	Messages    int
+}
+
+func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, listener string, tolerance time.Duration) (smtpSummary, error) {
+	result, _, err := runSMTPCorrelationExcluding(eventsPath, postfixPath, verdictPath, dbPath, instance, listener, tolerance, smtpSourceExclusion{})
+	return result, err
+}
+
+// runSMTPCorrelationExcluding leaves connections and messages from excluded
+// sources out of the summary, the records and the correlation database.
+func runSMTPCorrelationExcluding(eventsPath, postfixPath, verdictPath, dbPath, instance, listener string, tolerance time.Duration, exclude smtpSourceExclusion) (result smtpSummary, excluded smtpExclusionCounts, err error) {
 	if tolerance < 0 || tolerance > time.Minute {
-		return smtpSummary{}, fmt.Errorf("tolerance must be between zero and one minute")
+		return smtpSummary{}, excluded, fmt.Errorf("tolerance must be between zero and one minute")
 	}
 	if instance == "" {
-		return smtpSummary{}, fmt.Errorf("instance is required")
+		return smtpSummary{}, excluded, fmt.Errorf("instance is required")
 	}
 	if _, _, err := net.SplitHostPort(listener); err != nil {
-		return smtpSummary{}, fmt.Errorf("listener must be an exact IP:port endpoint: %w", err)
+		return smtpSummary{}, excluded, fmt.Errorf("listener must be an exact IP:port endpoint: %w", err)
 	}
 	conns, malformedEvents, err := readSMTPConnectionsStats(eventsPath)
 	if err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	filtered := conns[:0]
 	for _, c := range conns {
-		if c.Instance == instance && c.Listener == listener {
-			filtered = append(filtered, c)
+		if c.Instance != instance || c.Listener != listener {
+			continue
 		}
+		if exclude.excludesClient(c.Client) {
+			excluded.Connections++
+			continue
+		}
+		filtered = append(filtered, c)
 	}
 	conns = filtered
 	byClient := map[string][]smtpConnRecord{}
@@ -172,33 +199,42 @@ func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, 
 	}
 	messages, err := readPostfixMessages(postfixPath, instance)
 	if err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
+	keptMessages := messages[:0]
+	for _, m := range messages {
+		if exclude.excludesClient(m.Client) {
+			excluded.Messages++
+			continue
+		}
+		keptMessages = append(keptMessages, m)
+	}
+	messages = keptMessages
 	verdicts, malformed, err := readSMTPVerdicts(verdictPath)
 	if err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	if err = f.Close(); err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	defer closeWithError(&err, "close SMTP correlation database", db.Close)
 	if _, err = db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS smtp_correlations (event_key TEXT PRIMARY KEY, instance TEXT NOT NULL, queue_id TEXT NOT NULL, message_at TEXT NOT NULL, connection_id TEXT, ja3 TEXT, ja4 TEXT, classification TEXT NOT NULL, score REAL NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, audit_json TEXT NOT NULL)`); err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return smtpSummary{}, err
+		return smtpSummary{}, excluded, err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
@@ -290,7 +326,7 @@ func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, 
 		audit, _ := json.Marshal(r)
 		_, err = tx.Exec(`INSERT INTO smtp_correlations(event_key,instance,queue_id,message_at,connection_id,ja3,ja4,classification,score,reason,created_at,audit_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET connection_id=excluded.connection_id,ja3=excluded.ja3,ja4=excluded.ja4,classification=excluded.classification,score=excluded.score,reason=excluded.reason,created_at=excluded.created_at,audit_json=excluded.audit_json`, key, m.Instance, m.QueueID, m.At.UTC().Format("2006-01-02T15:04:05.000000000Z"), r.ConnectionID, r.JA3, r.JA4, r.Classification, r.Score, r.Reason, time.Now().UTC().Format(time.RFC3339Nano), string(audit))
 		if err != nil {
-			return s, err
+			return s, excluded, err
 		}
 		if r.Reason == "matched" {
 			s.Matched++
@@ -332,12 +368,12 @@ func runSMTPCorrelation(eventsPath, postfixPath, verdictPath, dbPath, instance, 
 	}
 	sort.Slice(s.Fingerprints, func(i, j int) bool { return s.Fingerprints[i].JA4 < s.Fingerprints[j].JA4 })
 	if _, err := tx.Exec(`DELETE FROM smtp_correlations WHERE event_key IN (SELECT event_key FROM smtp_correlations ORDER BY message_at DESC,event_key DESC LIMIT -1 OFFSET 100000)`); err != nil {
-		return s, err
+		return s, excluded, err
 	}
 	if err := tx.Commit(); err != nil {
-		return s, err
+		return s, excluded, err
 	}
-	return s, nil
+	return s, excluded, nil
 }
 
 func (c smtpConnRecord) completeObservation() bool {
