@@ -103,7 +103,7 @@
         CGO_ENABLED: "0"
         GOOS: linux
         GOARCH: "{{ goarch }}"
-        GOTOOLCHAIN: go1.27.1
+        GOTOOLCHAIN: go1.27.3
         GOCACHE: /tmp/tlsgate-go-cache
         GOMODCACHE: /tmp/tlsgate-go-mod-cache
       vars:
