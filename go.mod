@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/containrrr/shoutrrr v0.8.0
 	go.michaelspost.com/gatekit v0.7.1
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
