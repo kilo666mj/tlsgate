@@ -259,7 +259,7 @@ func (o *smtpObserver) server(p []byte) {
 		return
 	}
 	for {
-		i := strings.Index(string(o.serverLines), "\n")
+		i := bytes.IndexByte(o.serverLines, '\n')
 		if i < 0 {
 			return
 		}

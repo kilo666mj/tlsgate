@@ -262,6 +262,49 @@ func TestLoadConfigAllowsSecureNotificationURLs(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
+	// Every config key is security-relevant, so a typo must fail loudly
+	// instead of silently disabling the intended setting.
+	for _, data := range []string{
+		`{"approve_range": ["10.0.0.0/8"]}`,
+		`{"metrics_listen": "127.0.0.1:9192", "metrics_lisen": "127.0.0.1:9193"}`,
+		`{"control_plane": {"ur": "https://gatehub.example.com"}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if _, err := loadConfig(path); err == nil {
+			t.Fatalf("loadConfig accepted unknown key in %s, want error", data)
+		}
+	}
+}
+
+func TestLoadConfigRejectsTrailingContent(t *testing.T) {
+	dir := t.TempDir()
+	trailing := filepath.Join(dir, "trailing.json")
+	if err := os.WriteFile(trailing, []byte(`{"approve_ranges": []} trailing`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := loadConfig(trailing); err == nil {
+		t.Fatal("loadConfig accepted trailing content after the JSON object")
+	}
+
+	// Trailing whitespace after the object keeps loading: editors append a
+	// final newline.
+	valid := filepath.Join(dir, "valid.json")
+	if err := os.WriteFile(valid, []byte("{\"approve_ranges\": [\"10.0.0.0/8\"]}\n\n"), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadConfig(valid)
+	if err != nil {
+		t.Fatalf("loadConfig rejected trailing whitespace: %v", err)
+	}
+	if len(cfg.ApproveRanges) != 1 || cfg.ApproveRanges[0] != "10.0.0.0/8" {
+		t.Fatalf("approve_ranges = %v, want [10.0.0.0/8]", cfg.ApproveRanges)
+	}
+}
+
 func TestBlockedRangeAlerterDedupesByRangeAndIP(t *testing.T) {
 	st := newTestStore(t)
 	alerter := newTestAlerter(t, "scanner-net", "192.0.2.0/24")

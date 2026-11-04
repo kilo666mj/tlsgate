@@ -513,7 +513,10 @@ func readSMTPNetworkPrefixes(path string) ([]smtpNetworkPrefix, error) {
 		return nil, fmt.Errorf("network prefix input must be a regular file no larger than %d bytes", maxSMTPPrefixInput)
 	}
 	var input smtpNetworkPrefixFile
+	// The prefix map is operator-supplied config: unknown keys are typos that
+	// would otherwise silently drop provider labels from the report.
 	decoder := json.NewDecoder(io.LimitReader(file, maxSMTPPrefixInput+1))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		return nil, err
 	}
