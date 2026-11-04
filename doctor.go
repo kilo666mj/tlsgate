@@ -117,6 +117,11 @@ func runDoctor(args []string, out io.Writer) error {
 		emit("metrics: disabled\n")
 	} else {
 		emit("metrics: %s/metrics\n", cfg.MetricsListen)
+		if metricsBindsNonLoopback(cfg.MetricsListen) {
+			emit("warning: metrics endpoint %s is unauthenticated and not bound to loopback; "+
+				"listener addresses, ports and counters are readable by anyone who can reach it; "+
+				"bind a loopback address or restrict access in front of it\n", cfg.MetricsListen)
+		}
 	}
 	emit("trusted source ranges: %d\n", len(cfg.ApproveRanges))
 	emit("alert ranges: %d\n", len(cfg.AlertRanges))
@@ -187,6 +192,26 @@ func mailRouteHidesClient(listen, backend string) bool {
 	}
 	addr = addr.Unmap()
 	return addr.IsLoopback() || addr.IsPrivate()
+}
+
+// metricsBindsNonLoopback reports whether an unauthenticated metrics listener
+// would bind somewhere other than loopback. /metrics carries no
+// authentication, so doctor makes an off-loopback bind visible rather than let
+// listener addresses, ports and counters become quietly reachable off-host.
+func metricsBindsNonLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		// A hostname can resolve anywhere; flag it for review.
+		return true
+	}
+	return !addr.Unmap().IsLoopback()
 }
 
 func validateDoctorConfig(cfg AppConfig) error {

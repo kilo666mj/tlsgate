@@ -123,6 +123,58 @@ func TestMailRouteHidesClient(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsOnNonLoopbackMetrics(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"metrics_listen":"0.0.0.0:9192"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDoctor([]string{"--config", configPath, "--db", filepath.Join(dir, "db.sqlite")}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "warning: metrics endpoint 0.0.0.0:9192 is unauthenticated and not bound to loopback") {
+		t.Errorf("missing non-loopback metrics warning:\n%s", &out)
+	}
+}
+
+func TestDoctorDoesNotWarnOnLoopbackMetrics(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"metrics_listen":"127.0.0.1:9192"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDoctor([]string{"--config", configPath, "--db", filepath.Join(dir, "db.sqlite")}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "warning:") {
+		t.Errorf("unexpected warning for loopback metrics:\n%s", &out)
+	}
+}
+
+func TestMetricsBindsNonLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		listen string
+		want   bool
+	}{
+		{"127.0.0.1:9192", false},
+		{"[::1]:9192", false},
+		{"localhost:9192", false},
+		{"[::ffff:127.0.0.1]:9192", false},
+		{"[::]:9192", true},
+		{"0.0.0.0:9192", true},
+		{"192.0.2.10:9192", true},
+		{"[2001:db8::10]:9192", true},
+		{"mx.internal:9192", true},
+		{"not an address", false},
+	} {
+		if got := metricsBindsNonLoopback(tc.listen); got != tc.want {
+			t.Errorf("metricsBindsNonLoopback(%q) = %t, want %t", tc.listen, got, tc.want)
+		}
+	}
+}
+
 func TestDoctorWarnsOnMailRouteWithoutProxyProtocol(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
