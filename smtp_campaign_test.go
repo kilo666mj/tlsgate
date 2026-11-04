@@ -245,6 +245,16 @@ func TestSMTPNetworkPrefixesRequireCanonicalOfflineInput(t *testing.T) {
 	}
 }
 
+func TestSMTPNetworkPrefixesRejectUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prefixes.json")
+	if err := os.WriteFile(path, []byte(`{"prefixes":[{"prefix":"192.0.2.0/24","provider":"test"}],"providers":["test"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSMTPNetworkPrefixes(path); err == nil {
+		t.Fatal("unknown prefix-map key accepted, want error")
+	}
+}
+
 type smtpConnFixture struct {
 	id, client string
 	start, end time.Time

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/netip"
 	"net/url"
@@ -192,8 +194,18 @@ func loadConfig(path string) (AppConfig, error) {
 		return AppConfig{}, err
 	}
 	var cfg AppConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	// A config is operator-authored and every key is security-relevant, so
+	// unknown fields fail loudly instead of being silently dropped: a typo
+	// like "approve_range" or a misspelled control_plane key would otherwise
+	// quietly disable the intended setting. Trailing content after the JSON
+	// object stays rejected, matching json.Unmarshal's single-value contract.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		return AppConfig{}, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return AppConfig{}, fmt.Errorf("config must contain one JSON value")
 	}
 	if cfg.MaxFingerprints < -1 {
 		return AppConfig{}, fmt.Errorf("max_fingerprints must be >= -1, got %d", cfg.MaxFingerprints)
